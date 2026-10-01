@@ -1,6 +1,8 @@
 #!/bin/sh
 # Install, run and observe a VPK in Vita3K from the command line: no clicking, logs come back as files.
-#   tools/vita/vita3k.sh <app.vpk> <TITLEID> [--seconds N] [--cmd crash|quit] [--cmd-after S] [--elf <elf>]
+#   tools/vita/vita3k.sh <app.vpk> <TITLEID> [--seconds N] [--cmd crash|quit] [--cmd-after S] [--elf <elf>] [--screenshot S]
+#   --screenshot S  (macOS) capture ONLY the emulator window S seconds after launch to
+#                   build-vita/logs/<TITLEID>.png. Needs Screen Recording permission for the terminal.
 # Writes to build-vita/logs/: <TITLEID>.app.log (the app's own ux0:data/wowee/*.log) and
 # vita3k.log (the emulator log, which shows aborts and crashes). Exit status 0 if the app log has content.
 # Env: VITA3K_BIN (emulator binary), VITA3K_PREF (its pref-path; default read from config.yml).
@@ -10,13 +12,14 @@ set -eu
 vpk="${1:?usage: vita3k.sh <app.vpk> <TITLEID> [--seconds N] [--cmd crash|quit] [--cmd-after S]}"
 titleid="${2:?usage: vita3k.sh <app.vpk> <TITLEID> ...}"
 shift 2
-seconds=15; cmd=""; cmd_after=8; elf=""
+seconds=15; cmd=""; cmd_after=8; elf=""; shot_after=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --seconds) seconds=$2; shift 2 ;;
         --cmd) cmd=$2; shift 2 ;;
         --cmd-after) cmd_after=$2; shift 2 ;;
         --elf) elf=$2; shift 2 ;;
+        --screenshot) shot_after=$2; shift 2 ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
 done
@@ -60,13 +63,25 @@ rm -f "$appdata"/*.log "$appdata/devcheck.cmd"
 "$bin" -r "$titleid" >"$out/vita3k.log" 2>&1 &
 pid=$!
 
-if [ -n "$cmd" ]; then
-    sleep "$cmd_after"
-    printf '%s\n' "$cmd" > "$appdata/devcheck.cmd"
-    sleep $((seconds > cmd_after ? seconds - cmd_after : 3))
-else
-    sleep "$seconds"
-fi
+# Window-only capture: find the emulator window of the process started here, never the whole screen.
+screenshot() {
+    wid=""
+    for _ in 1 2 3; do
+        wid=$(swift "$(dirname "$0")/macos_window_id.swift" "$pid" 2>/dev/null) && break
+        sleep 1
+    done
+    if [ -z "$wid" ]; then echo "screenshot: no emulator window found" >&2; return 1; fi
+    screencapture -x -o -l "$wid" "$out/$titleid.png" && echo "screenshot: $out/$titleid.png"
+}
+rm -f "$out/$titleid.png"
+if [ -n "$shot_after" ] && [ "$(uname -s)" != Darwin ]; then echo "--screenshot is macOS only" >&2; shot_after=""; fi
+
+t=0
+while [ "$t" -lt "$seconds" ]; do
+    sleep 1; t=$((t + 1))
+    [ -n "$cmd" ] && [ "$t" -eq "$cmd_after" ] && printf '%s\n' "$cmd" > "$appdata/devcheck.cmd"
+    [ -n "$shot_after" ] && [ "$t" -eq "$shot_after" ] && { screenshot || true; }
+done
 stop_emu
 trap - EXIT INT TERM
 
