@@ -4,7 +4,7 @@ How to build, run, log and debug WoWee for the PS Vita. Everything here lives in
 `tools/vita/`; no upstream file is touched (see [FORK_POLICY.md](FORK_POLICY.md)).
 
 **Verification status.** Sections marked *(verified)* were run on the maintainer's Mac (Apple
-Silicon, `container` CLI). Sections marked *(unverified)* need a Vita or Vita3K and have not been
+Silicon, `container` CLI, Vita3K v0.2.1). Sections marked *(unverified)* need a Vita or Vita3K and have not been
 run yet; the acceptance checklist at the bottom is where they get confirmed.
 
 ## 1. Toolchain
@@ -53,11 +53,36 @@ pins the exact toolchain and does not touch the host.
   not install an overclocking plugin (PSVshell etc.) unless a measurement needs it. If you do, write
   the clocks next to the numbers.
 
-## 3. Emulator: Vita3K
+## 3. Emulator: Vita3K *(verified: install, run, log, crash)*
 
-Vita3K is for **smoke tests only** (does it boot, does the UI come up, does the log appear). It does
-**not** replace hardware: its speed and memory behaviour say nothing about the real device, so every
-performance or memory number must come from a Vita. Install the VPK via File > Install .vpk.
+Vita3K is for **smoke tests only** (does it boot, does the log appear, does it crash where expected).
+It does **not** replace hardware: its speed and memory behaviour say nothing about the real device, so
+every performance or memory number must come from a Vita.
+
+It is fully scriptable from the command line, with no clicking:
+
+```sh
+tools/vita/build.sh ...                      # build the VPK (section 1)
+tools/vita/vita3k.sh build-vita/devcheck/devcheck.vpk DEVC00001 --seconds 16 \
+    --cmd crash --elf build-vita/devcheck/devcheck
+```
+
+`vita3k.sh` installs the VPK, launches it with `-r <TITLEID>`, optionally drops a command into the
+app's `ux0:data/wowee/devcheck.cmd` after `--cmd-after` seconds (`quit` or `crash`), stops the emulator
+and writes `build-vita/logs/<TITLEID>.app.log` (the app's own log file) and `vita3k.log` (the emulator
+log). It reads the emulator's `pref-path` from `config.yml`, so it finds `ux0:` wherever it lives; set
+`VITA3K_BIN` if the binary is not in the default place.
+
+**Crashes:** the emulator has no core dump. It prints `Invalid read/write ... PC: 0x810004d6 LR: ...` in
+its log, and `tools/vita/symbolize_emu.sh <vita3k.log> <elf>` (called by `vita3k.sh --elf`) turns that
+into `main at main.c:101` with `arm-vita-eabi-addr2line`. Real-device dumps use `parse_core.sh` (section 6).
+
+Quirks found while scripting it:
+- Vita3K ignores SIGTERM while an app runs, so the script escalates to `kill -9` (only on the instance it
+  started; a Vita3K you have open yourself is left alone).
+- `Vita3K <file.vpk>` installs but its "auto-boot" did not start the app, so install and run are two steps.
+- The log level in `config.yml` is trace, so the emulator log gets large; the app log stays small.
+- The emulator window opens on the desktop while a script runs (no headless mode used here).
 
 ## 4. Deploy loop *(unverified on hardware)*
 
@@ -118,8 +143,9 @@ no server has been brought up for this project yet.)*
 ## 8. Acceptance checklist (VITA-2)
 
 - [x] `tools/vita/build.sh` builds `devcheck.vpk` + `eboot.bin` in the pinned image on macOS (arm64).
-- [ ] devcheck installed and run on **hardware**; log fetched over FTP and via `logsink.sh`.
-- [ ] devcheck run on **Vita3K**.
-- [ ] TRIANGLE crash on hardware produces a `.psp2dmp`; `parse_core.sh` symbolizes it against
+- [ ] *(deferred)* devcheck installed and run on **hardware**; log fetched over FTP and via `logsink.sh`.
+- [x] devcheck installed, run, logged and driven (`quit`/`crash`) on **Vita3K** by `vita3k.sh`; the
+      forced null write is symbolized to `main.c:101` by `symbolize_emu.sh`.
+- [ ] *(deferred)* TRIANGLE crash on hardware produces a `.psp2dmp`; `parse_core.sh` symbolizes it against
       `build-vita/devcheck/devcheck` and shows `main` / `main.c` at the faulting line.
-- [ ] Local AzerothCore reachable from the Vita's network.
+- [ ] *(deferred)* Local AzerothCore reachable from the Vita's network (the emulator can reach it too).

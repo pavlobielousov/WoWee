@@ -2,6 +2,8 @@
  *   - logs to ux0:data/wowee/devcheck.log and, if ux0:data/wowee/loghost.txt holds
  *     "<ip>[:port]" (default port 9999), to a UDP listener on the dev machine
  *   - TRIANGLE: null write (core dump test)   START: quit
+ *   - or write "crash" / "quit" into ux0:data/wowee/devcheck.cmd (lets a host script drive the
+ *     app in an emulator with no key presses); the file is deleted once read
  */
 #include <psp2/ctrl.h>
 #include <psp2/io/fcntl.h>
@@ -18,6 +20,7 @@
 #define DIR_PATH "ux0:data/wowee"
 #define LOG_PATH DIR_PATH "/devcheck.log"
 #define HOST_PATH DIR_PATH "/loghost.txt"
+#define CMD_PATH DIR_PATH "/devcheck.cmd"
 
 static char net_memory[128 * 1024];
 static int g_sock = -1;
@@ -69,6 +72,18 @@ static void log_line(const char *fmt, ...) {
         sceNetSendto(g_sock, line, (unsigned)n, 0, (SceNetSockaddr *)&g_dest, sizeof g_dest);
 }
 
+/* Returns 'c' (crash), 'q' (quit) or 0. */
+static char read_command(void) {
+    char buf[16] = {0};
+    SceUID fd = sceIoOpen(CMD_PATH, SCE_O_RDONLY, 0);
+    if (fd < 0)
+        return 0;
+    sceIoRead(fd, buf, sizeof buf - 1);
+    sceIoClose(fd);
+    sceIoRemove(CMD_PATH);
+    return strncmp(buf, "crash", 5) == 0 ? 'c' : strncmp(buf, "quit", 4) == 0 ? 'q' : 0;
+}
+
 int main(void) {
     sceIoMkdir(DIR_PATH, 0777);
     net_log_init();
@@ -78,9 +93,10 @@ int main(void) {
     SceCtrlData pad;
     for (;;) {
         sceCtrlPeekBufferPositive(0, &pad, 1);
-        if (pad.buttons & SCE_CTRL_START)
+        char cmd = read_command();
+        if ((pad.buttons & SCE_CTRL_START) || cmd == 'q')
             break;
-        if (pad.buttons & SCE_CTRL_TRIANGLE) {
+        if ((pad.buttons & SCE_CTRL_TRIANGLE) || cmd == 'c') {
             log_line("crashing on purpose");
             *(volatile int *)0 = 1;
         }

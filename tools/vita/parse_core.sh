@@ -7,24 +7,16 @@
 # and arm-vita-eabi-addr2line from the toolchain.
 set -eu
 
-VITASDK_IMAGE="${VITASDK_IMAGE:-vitasdk/vitasdk:2026.08-20260925}"
+. "$(dirname "$0")/lib.sh"
 # xyzz/vita-parse-core master, pinned
 PARSE_CORE_REV=644b5f081c5f3c9b205180793ab8f4209dfd9d97
 
 core="${1:?usage: parse_core.sh <core.psp2dmp> <elf>}"
 elf="${2:?usage: parse_core.sh <core.psp2dmp> <elf>}"
-root=$(cd "$(dirname "$0")/../.." && pwd)
+core_rel=$(vita_rel "$core"); elf_rel=$(vita_rel "$elf")
+runtime=$(vita_runtime)
 
-# Paths must live under the repo root so the container can see them.
-rel() { python3 -c 'import os,sys;print(os.path.relpath(os.path.realpath(sys.argv[1]),sys.argv[2]))' "$1" "$root"; }
-core_rel=$(rel "$core"); elf_rel=$(rel "$elf")
-
-if [ -n "${CONTAINER_RUNTIME:-}" ]; then runtime=$CONTAINER_RUNTIME
-elif [ "$(uname -s)" = Darwin ]; then runtime=container
-elif command -v docker >/dev/null 2>&1; then runtime=docker
-else runtime=podman; fi
-
-exec "$runtime" run --rm -v "$root:/workspace" "$VITASDK_IMAGE" sh -c '
+exec "$runtime" run --rm -v "$VITA_ROOT:/workspace" "$VITASDK_IMAGE" sh -c '
     set -e
     d=$(mktemp -d)
     git clone -q https://github.com/xyzz/vita-parse-core "$d"
