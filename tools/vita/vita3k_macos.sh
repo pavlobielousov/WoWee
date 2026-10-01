@@ -1,7 +1,8 @@
 #!/bin/sh
 # Install, run and observe a VPK in Vita3K from the command line: no clicking, logs come back as files.
-#   tools/vita/vita3k.sh <app.vpk> <TITLEID> [--seconds N] [--cmd crash|quit] [--cmd-after S] [--elf <elf>] [--screenshot S]
-#   --screenshot S  (macOS) capture ONLY the emulator window S seconds after launch to
+# macOS only (Vita3K.app paths, window-only screenshots via screencapture/Swift).
+#   tools/vita/vita3k_macos.sh <app.vpk> <TITLEID> [--seconds N] [--cmd crash|quit] [--cmd-after S] [--elf <elf>] [--screenshot S]
+#   --screenshot S  capture ONLY the emulator window S seconds after launch to
 #                   build-vita/logs/<TITLEID>.png. Needs Screen Recording permission for the terminal.
 # Writes to build-vita/logs/: <TITLEID>.app.log (the app's own ux0:data/wowee/*.log) and
 # vita3k.log (the emulator log, which shows aborts and crashes). Exit status 0 if the app log has content.
@@ -9,8 +10,10 @@
 # Smoke tests only: emulator speed and memory say nothing about a real Vita.
 set -eu
 
-vpk="${1:?usage: vita3k.sh <app.vpk> <TITLEID> [--seconds N] [--cmd crash|quit] [--cmd-after S]}"
-titleid="${2:?usage: vita3k.sh <app.vpk> <TITLEID> ...}"
+[ "$(uname -s)" = Darwin ] || { echo "vita3k_macos.sh runs on macOS only (found $(uname -s))" >&2; exit 1; }
+
+vpk="${1:?usage: vita3k_macos.sh <app.vpk> <TITLEID> [--seconds N] [--cmd crash|quit] [--cmd-after S]}"
+titleid="${2:?usage: vita3k_macos.sh <app.vpk> <TITLEID> ...}"
 shift 2
 seconds=15; cmd=""; cmd_after=8; elf=""; shot_after=""
 while [ $# -gt 0 ]; do
@@ -24,13 +27,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-case "$(uname -s)" in
-    Darwin) bin_default=/Applications/Vita3K.app/Contents/MacOS/Vita3K
-            data_default="$HOME/Library/Application Support/Vita3K/Vita3K" ;;
-    *)      bin_default=$(command -v Vita3K || echo Vita3K)
-            data_default="${XDG_DATA_HOME:-$HOME/.local/share}/Vita3K/Vita3K" ;;
-esac
-bin="${VITA3K_BIN:-$bin_default}"
+bin="${VITA3K_BIN:-/Applications/Vita3K.app/Contents/MacOS/Vita3K}"
+data_default="$HOME/Library/Application Support/Vita3K/Vita3K"
 [ -x "$bin" ] || { echo "Vita3K not found at $bin (set VITA3K_BIN)" >&2; exit 1; }
 
 pref="${VITA3K_PREF:-}"
@@ -74,7 +72,6 @@ screenshot() {
     screencapture -x -o -l "$wid" "$out/$titleid.png" && echo "screenshot: $out/$titleid.png"
 }
 rm -f "$out/$titleid.png"
-if [ -n "$shot_after" ] && [ "$(uname -s)" != Darwin ]; then echo "--screenshot is macOS only" >&2; shot_after=""; fi
 
 t=0
 while [ "$t" -lt "$seconds" ]; do

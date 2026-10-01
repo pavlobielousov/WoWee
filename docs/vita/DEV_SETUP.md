@@ -59,28 +59,29 @@ Vita3K is for **smoke tests only** (does it boot, does the log appear, does it c
 It does **not** replace hardware: its speed and memory behaviour say nothing about the real device, so
 every performance or memory number must come from a Vita.
 
-It is fully scriptable from the command line, with no clicking:
+It is fully scriptable from the command line, with no clicking. The driver is macOS-only (it refuses to run
+elsewhere); a Linux/CI equivalent would be a separate `vita3k_linux.sh`, not written yet.
 
 ```sh
 tools/vita/build.sh ...                      # build the VPK (section 1)
-tools/vita/vita3k.sh build-vita/devcheck/devcheck.vpk DEVC00001 --seconds 16 \
+tools/vita/vita3k_macos.sh build-vita/devcheck/devcheck.vpk DEVC00001 --seconds 16 \
     --cmd crash --elf build-vita/devcheck/devcheck
 ```
 
-`vita3k.sh` installs the VPK, launches it with `-r <TITLEID>`, optionally drops a command into the
+`vita3k_macos.sh` installs the VPK, launches it with `-r <TITLEID>`, optionally drops a command into the
 app's `ux0:data/wowee/devcheck.cmd` after `--cmd-after` seconds (`quit` or `crash`), stops the emulator
 and writes `build-vita/logs/<TITLEID>.app.log` (the app's own log file) and `vita3k.log` (the emulator
 log). It reads the emulator's `pref-path` from `config.yml`, so it finds `ux0:` wherever it lives; set
 `VITA3K_BIN` if the binary is not in the default place.
 
-**Screenshots (macOS):** add `--screenshot S` to capture the emulator window S seconds after launch to
+**Screenshots:** add `--screenshot S` to capture the emulator window S seconds after launch to
 `build-vita/logs/<TITLEID>.png`. Only that window is captured (`tools/vita/macos_window_id.swift` finds its
 window id for `screencapture -l`), never the whole screen. The terminal needs Screen Recording permission
 (System Settings > Privacy & Security). devcheck draws nothing, so its shot is an empty window; it proves
 the capture path, and becomes useful once a renderer exists.
 
 **Crashes:** the emulator has no core dump. It prints `Invalid read/write ... PC: 0x810004d6 LR: ...` in
-its log, and `tools/vita/symbolize_emu.sh <vita3k.log> <elf>` (called by `vita3k.sh --elf`) turns that
+its log, and `tools/vita/symbolize_emu.sh <vita3k.log> <elf>` (called by `vita3k_macos.sh --elf`) turns that
 into `main at main.c:101` with `arm-vita-eabi-addr2line`. Real-device dumps use `parse_core.sh` (section 6).
 
 Quirks found while scripting it:
@@ -89,7 +90,7 @@ Quirks found while scripting it:
 - `Vita3K <file.vpk>` installs but its "auto-boot" did not start the app, so install and run are two steps.
 - The log level in `config.yml` is trace, so the emulator log gets large; the app log stays small.
 - The emulator window opens on the desktop while a script runs (no headless mode used here).
-- Starting from nothing works: with no app installed, `vita3k.sh` installs the VPK itself.
+- Starting from nothing works: with no app installed, `vita3k_macos.sh` installs the VPK itself.
 
 ## 4. Deploy loop *(unverified on hardware)*
 
@@ -151,7 +152,7 @@ no server has been brought up for this project yet.)*
 
 - [x] `tools/vita/build.sh` builds `devcheck.vpk` + `eboot.bin` in the pinned image on macOS (arm64).
 - [ ] *(deferred)* devcheck installed and run on **hardware**; log fetched over FTP and via `logsink.sh`.
-- [x] devcheck installed, run, logged and driven (`quit`/`crash`) on **Vita3K** by `vita3k.sh`; the
+- [x] devcheck installed, run, logged and driven (`quit`/`crash`) on **Vita3K** by `vita3k_macos.sh`; the
       forced null write is symbolized to `main.c:101` by `symbolize_emu.sh`.
 - [ ] *(deferred)* TRIANGLE crash on hardware produces a `.psp2dmp`; `parse_core.sh` symbolizes it against
       `build-vita/devcheck/devcheck` and shows `main` / `main.c` at the faulting line.

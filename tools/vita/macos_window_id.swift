@@ -1,6 +1,6 @@
 // Prints the CGWindowID of the largest normal window owned by a process id (macOS only).
 //   swift tools/vita/macos_window_id.swift <pid>      exits 1 and prints nothing if there is none
-// Used by vita3k.sh --screenshot so `screencapture -l <id>` grabs only that window.
+// Used by vita3k_macos.sh --screenshot so `screencapture -l <id>` grabs only that window.
 import CoreGraphics
 import Foundation
 
