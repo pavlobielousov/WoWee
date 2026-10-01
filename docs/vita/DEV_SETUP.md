@@ -84,6 +84,31 @@ the capture path, and becomes useful once a renderer exists.
 its log, and `tools/vita/symbolize_emu.sh <vita3k.log> <elf>` (called by `vita3k_macos.sh --elf`) turns that
 into `main at main.c:101` with `arm-vita-eabi-addr2line`. Real-device dumps use `parse_core.sh` (section 6).
 
+**Deeper crash inspection: gdb at the crash PC** *(verified on devcheck)*. The emulator log only gives PC, LR and
+registers. Vita3K has a gdbstub (`gdbstub: true` in `config.yml`, port 2159) and the VitaSDK image has
+`arm-vita-eabi-gdb`, but on this build (v0.2.1) the stub does not report a crash to gdb, so gdb cannot simply
+"catch" it. Instead, run in two passes:
+
+```sh
+# pass 1: crash it; the emulator log gets "PC: 0x810004d6"
+tools/vita/vita3k_macos.sh build-vita/devcheck/devcheck.vpk DEVC00001 --cmd crash --elf build-vita/devcheck/devcheck
+# pass 2: same run under the stub with a breakpoint at that PC; gdb stops just before the faulting instruction
+tools/vita/gdb_at_pc.sh DEVC00001 build-vita/devcheck/devcheck --cmd crash
+```
+
+Pass 2 prints the thread list, `bt full` (locals of every frame), all registers, the next instructions and 32 stack
+words, and keeps the whole session in `build-vita/logs/gdb_at_pc.txt`. `--pc` overrides the PC taken from the log;
+`--skip N` ignores the first N hits when the crashing line also runs earlier without crashing; exit status is
+0 (stopped), 3 (could not connect) or 4 (breakpoint never hit). It uses a throwaway copy of `config.yml`, so your
+own Vita3K settings are not touched.
+
+Limits (this build; upstream PR Vita3K#3879 improves the stub but was still open when checked): needs a
+**repeatable** crash; Ctrl-C, single-step (`stepi`) and detach do not work, so a session can only break and inspect;
+the backtrace is only as deep as the stub's unwinding (one caller frame was verified); connections occasionally time
+out (the script retries); the stub listens on all interfaces, so only run it on a trusted network. The stub also
+cannot detach, so a finished session leaves a TCP socket on port 2159 that blocks the next session; a second run
+started soon afterwards waits for it to clear (up to a few minutes) and says so.
+
 Quirks found while scripting it:
 - Vita3K ignores SIGTERM while an app runs, so the script escalates to `kill -9` (only on the instance it
   started; a Vita3K you have open yourself is left alone).
