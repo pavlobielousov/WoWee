@@ -248,6 +248,7 @@ Application::Application() {
 
 Application::~Application() {
     shutdown();
+    game::setActiveExpansionRegistry(nullptr);
     instance = nullptr;
 }
 
@@ -349,6 +350,7 @@ bool Application::initialize() {
 
     // Create and initialize expansion registry
     expansionRegistry_ = std::make_unique<game::ExpansionRegistry>();
+    game::setActiveExpansionRegistry(expansionRegistry_.get());
 
     // Create DBC layout
     dbcLayout_ = std::make_unique<pipeline::DBCLayout>();

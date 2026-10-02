@@ -15,7 +15,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/spell_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
-#include "core/application.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "network/world_socket.hpp"

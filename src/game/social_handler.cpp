@@ -15,7 +15,6 @@
 #include "network/world_socket.hpp"
 #include "rendering/renderer.hpp"
 #include "core/logger.hpp"
-#include "core/application.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>

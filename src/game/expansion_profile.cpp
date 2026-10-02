@@ -283,5 +283,10 @@ bool ExpansionRegistry::loadProfile(const std::string& jsonPath, const std::stri
     return true;
 }
 
+static ExpansionRegistry* g_activeExpansionRegistry = nullptr;
+
+void setActiveExpansionRegistry(ExpansionRegistry* registry) { g_activeExpansionRegistry = registry; }
+ExpansionRegistry* getActiveExpansionRegistry() { return g_activeExpansionRegistry; }
+
 } // namespace game
 } // namespace wowee

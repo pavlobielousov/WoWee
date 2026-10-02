@@ -34,7 +34,6 @@
 #include "network/packet.hpp"
 #include "auth/crypto.hpp"
 #include "core/coordinates.hpp"
-#include "core/application.hpp"
 #include "core/config_paths.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"

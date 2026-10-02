@@ -14,7 +14,6 @@
 #include "audio/combat_sound_manager.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/npc_voice_manager.hpp"
-#include "core/application.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
 #include "network/world_socket.hpp"
