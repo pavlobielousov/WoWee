@@ -353,6 +353,8 @@ role gets, and `core::enterThread(role)`, the first line of a thread body, which
 | watchdog | **0** (no thread: it only releases a desktop mouse grab) | - | - |
 | async creature / game object / equipment loads (in flight) | 1 each | 2 | 184 / 184 / 186 |
 
+The NPC composite pre-decode (`entity_spawner.cpp`, one launch per new humanoid display id, no in-flight limit of its own) goes through `core::launchBackground` (`thread_pool.hpp`): `std::async` on the desktop, the single I/O worker on the Vita. Not capped: the login backdrop decode (one launch), Warden (dropped on the Vita) and the detached normal-map threads in `character_renderer` (Vulkan renderer).
+
 No role ever gets the system core (core 3, `SCE_KERNEL_CPU_MASK_SYSTEM`). `WOWEE_TERRAIN_WORKERS` is not overridden on the Vita: it is
 applied inside `computeTerrainWorkerCount` before the budget is asked, and the budget still caps it at 1, so an env.txt value has no effect
 (`m2_renderer`, `wmo_renderer` and `character_renderer` keep their own `hardware_concurrency` formulas, because the Vulkan renderer does not
@@ -387,7 +389,8 @@ Measured on Vita3K (`[v3k]`; **the same on hardware is VITA-34**):
 
 Vita3K does not schedule on real cores, so **only the API results are meaningful here, not that the threads run where they were told**.
 
-**One unexplained hang:** a first `LOG_WARNING` in a probe built `-O1` with no `Logger::setLogLevel` call stopped the process right after the
-"writing the log to ..." line (no crash message in the emulator log). With the real app's flags (`-O2 -ffunction-sections`, `--gc-sections`) and
-`setLogLevel(WARNING)` as `main.cpp` does, it works, and the real `wowee.vpk` always did. Cause not found; if the logger ever stops
-mid-startup in a new Vita executable, start there.
+**A trap (cause unknown, VITA-42):** an executable that links `core/logger.cpp` and the platform layer but is built **without**
+`-ffunction-sections -fdata-sections` and `-Wl,--gc-sections` stops at its first `LOG_*` call, right after the "writing the log to ..." line (no
+crash message in the emulator log, nothing after it). Bisected on Vita3K with the threadcheck probe (`-DTHREADCHECK_SECTIONS=` drops the flags,
+`-DTHREADCHECK_OPT=-O1` changes the optimisation): it hangs with the flags dropped at `-O1` and `-O2`, with or without `setLogLevel`, and never with
+them. `cmake/vita/Vita.cmake` has them, so the real `wowee.vpk` is fine; **copy them into any new Vita executable** that uses the logger.

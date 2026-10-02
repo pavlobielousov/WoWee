@@ -110,16 +110,23 @@ int __real_pthread_create(pthread_t*, const pthread_attr_t*, void* (*)(void*), v
 int __wrap_pthread_create(pthread_t* thread, const pthread_attr_t* attr, void* (*start)(void*),
                           void* arg) {
     constexpr size_t kWanted = static_cast<size_t>(WOWEE_VITA_THREAD_STACK_KB) * 1024;
-    pthread_attr_t local;
-    if (attr) {
-        local = *attr;
+    // pthread_attr_t is a POINTER to a heap struct here (pthreads-win32 lineage). With no attr
+    // (every std::thread and std::async) we own the one we make and must destroy it after the
+    // create, which copies what it needs. A caller's attr is changed in place: it keeps the raised
+    // stack, and stays the caller's to destroy.
+    pthread_attr_t local = nullptr;
+    const bool owned = (attr == nullptr);
+    if (owned) {
+        if (pthread_attr_init(&local) != 0) return __real_pthread_create(thread, nullptr, start, arg);
     } else {
-        pthread_attr_init(&local);
+        local = *attr;
     }
     size_t current = 0;
     if (pthread_attr_getstacksize(&local, &current) != 0 || current < kWanted) {
         pthread_attr_setstacksize(&local, kWanted);
     }
-    return __real_pthread_create(thread, &local, start, arg);
+    const int result = __real_pthread_create(thread, &local, start, arg);
+    if (owned) pthread_attr_destroy(&local);
+    return result;
 }
 }

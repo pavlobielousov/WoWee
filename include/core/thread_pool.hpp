@@ -115,5 +115,18 @@ private:
     bool stop_ = false;
 };
 
+// A one-off background task whose result is picked up later through the future. Desktop: exactly
+// std::async(std::launch::async, fn), one new thread per task. Vita: the task runs on the single
+// I/O worker, so a burst of launches (a city full of new NPC models) queues up instead of starting
+// a thread, and a 512 KB stack, per task. The returned future's destructor does not wait there.
+template <typename F>
+auto launchBackground(F&& fn) -> std::future<std::invoke_result_t<std::decay_t<F>>> {
+#ifdef __vita__
+    return ThreadPool::ioWorkers().submit(std::forward<F>(fn));
+#else
+    return std::async(std::launch::async, std::forward<F>(fn));
+#endif
+}
+
 } // namespace core
 } // namespace wowee

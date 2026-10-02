@@ -520,6 +520,7 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
             AsyncCreatureLoad load;
             load.future = std::async(std::launch::async,
                 [am, m2Path, modelId, s, skinPaths = std::move(displaySkinPaths)]() -> PreparedCreatureModel {
+                    core::enterThread(core::ThreadRole::AsyncCreatureLoad);
                     PreparedCreatureModel result;
                     result.guid = s.guid;
                     result.displayId = s.displayId;
@@ -805,6 +806,7 @@ void EntitySpawner::processDeferredEquipmentQueue() {
     AsyncEquipmentLoad load;
     load.future = std::async(std::launch::async,
         [am, guid, displayInfoIds, inventoryTypes, paths = std::move(texturePaths)]() -> PreparedEquipmentUpdate {
+            core::enterThread(core::ThreadRole::AsyncEquipmentLoad);
             PreparedEquipmentUpdate result;
             result.guid = guid;
             result.displayInfoIds = displayInfoIds;
@@ -993,6 +995,7 @@ void EntitySpawner::processGameObjectSpawnQueue() {
             AsyncGameObjectLoad load;
             load.future = std::async(std::launch::async,
                 [am, capture, capturePath]() -> PreparedGameObjectWMO {
+                    core::enterThread(core::ThreadRole::AsyncObjectLoad);
                     PreparedGameObjectWMO result;
                     result.guid = capture.guid;
                     result.entry = capture.entry;

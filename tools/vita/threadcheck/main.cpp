@@ -70,7 +70,9 @@ int main() {
     sceIoMkdir("ux0:data/wowee", 0777);
     sceIoClose(sceIoOpen("ux0:data/wowee/threadcheck.log", SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777));
 
+#ifndef THREADCHECK_NO_LOGLEVEL
     wowee::core::Logger::getInstance().setLogLevel(wowee::core::LogLevel::WARNING);
+#endif
     LOG_WARNING("threadcheck: logger started on the main thread");
     out("logger_main=ok\n");
     out("hardware_concurrency=%u\n", std::thread::hardware_concurrency());
