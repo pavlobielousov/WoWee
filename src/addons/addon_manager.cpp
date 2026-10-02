@@ -20,6 +20,9 @@ extern "C" {
 #include <optional>
 #include <cstdlib>
 #include <filesystem>
+#if defined(__vita__)
+#include "platform/vita/device_path.hpp"
+#endif
 #include <fstream>
 #include <chrono>
 #include <utility>
@@ -142,8 +145,17 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
     }
     std::error_code rec;
     for (const char* local : {"addons", "../addons", "../../addons"}) {
+#if defined(__vita__)
+        // absolute() and weakly_canonical() mangle "ux0:" paths (VITA-35). "../" stops at the
+        // device root, so two spellings can land on one directory: add each once.
+        const fs::path p = platform::vita::resolveDevicePath(fs::path(local));
+        if (fs::is_directory(p, rec) && std::find(roots.begin(), roots.end(), p) == roots.end()) {
+            roots.push_back(p);
+        }
+#else
         fs::path p = fs::absolute(local, rec);
         if (fs::is_directory(p, rec)) roots.push_back(fs::weakly_canonical(p, rec));
+#endif
     }
 
     int scannedDirs = 0, loadOnDemand = 0, noToc = 0;

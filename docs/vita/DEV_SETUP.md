@@ -275,3 +275,28 @@ What this does **not** cover:
 **Not tried:** i386 (`-m32`) and the Rosetta question. Step 3 succeeded, so the plan said to skip it; the claim that Rosetta for Linux cannot run 32-bit x86 remains unverified. armhf is also the closer match to the Vita (same ILP32, alignment and hard-float ABI), so i386 would only be a fallback.
 
 **Fallbacks if armhf ever becomes impractical** (not needed now): run chosen tests as a Vita app on Vita3K like `tools/vita/depcheck/`, which tests newlib but gives pass/fail only through the log; or rely on the compile-only sweep. That would lose real execution of the 200+ Catch2 tests.
+
+## 11. Device paths and `std::filesystem` (VITA-35) *(verified on Vita3K; hardware is VITA-34)*
+
+`std::filesystem` does not know the `ux0:` / `uma0:` / `app0:` roots. Measured by `tools/vita/depcheck` (section `devpath`):
+
+| Call | On a device path | Rule |
+|---|---|---|
+| `absolute()`, `weakly_canonical()` | `app0:/ux0:data/x` under cwd `app0:`; an **error** (`ec=2`, and a throw in the overload without `ec`) after a chdir to `ux0:` | never call on a device path; use `platform::vita::resolveDevicePath()` |
+| `canonical()` on an **existing** relative file | correct (`app0:/eboot.bin`, `ux0:/data/...`) | fine |
+| `current_path() / "rel"` | correct (`app0:/assets/x`) | fine |
+| `fs::equivalent(a, b)` | **true for two different directories** | do not trust it on Vita (VITA-41) |
+| `remove_all()` on a non-empty tree | never returns | never call it; use `platform::vita::removeTree()` |
+| `space()` | nonsense (4294967295 MB) | do not use; a `sceIoDevctl` helper waits for VITA-25 |
+| `create_directories`, `rename`, `remove`, `file_size`, directory iteration, `current_path("ux0:...")` | work | fine |
+
+The cwd is `app0:` at launch and `ux0:/data/...` (note the slash) after a chdir.
+
+`include/platform/vita/device_path.hpp` (header-only, pure string work except `removeTree`): `hasDeviceRoot`, `normalizeDevicePath`, `resolveDevicePath(p[, cwd])`, `removeTree`. It always emits `dev:/rest`, resolves relative paths against `current_path()`, and stops `..` at the device root, so two spellings of one file give one string (`opcode_table.cpp` uses that as its cycle-detection key). Host test, no SDK needed:
+
+```sh
+c++ -std=c++20 -Wall -Wextra -Werror -Iinclude tools/vita/depcheck/devpath_test.cpp -o /tmp/devpath_test && /tmp/devpath_test
+```
+
+The Vita arms are in `game/opcode_table.cpp` and `addons/addon_manager.cpp`. The other call sites in the VITA-35 list were probed and need no change: `auth_screen.cpp` (both sites), `config_paths.cpp` (the `current == root` comparison can miss on spelling, `app0:` vs `app0:/`, which only repeats a harmless chdir), `zone_manager.cpp` (`canonical()` of an existing file works), and `core/window.cpp:35` is macOS-only code.
+
