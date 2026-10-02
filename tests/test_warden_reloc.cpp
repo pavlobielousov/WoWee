@@ -3,6 +3,7 @@
 #include "game/warden_module.hpp"
 
 using wowee::game::wardenAbsoluteRelocTarget;
+using wowee::game::wardenImportTableFits;
 using wowee::game::wardenRelocTargetFits;
 
 // A Warden module arrives from the server. Its relocation entries name offsets
@@ -40,4 +41,24 @@ TEST_CASE("A relocation target is measured without wrapping", "[warden]") {
     CHECK(wardenRelocTargetFits(static_cast<uint32_t>(kImage) - 4, kImage));
     CHECK_FALSE(wardenRelocTargetFits(static_cast<uint32_t>(kImage) - 3, kImage));
     CHECK(wardenRelocTargetFits(0, kImage));
+}
+
+TEST_CASE("An import table is measured without wrapping", "[warden]") {
+    // The table is importCount 8-byte descriptors at importOffset, both from the module. importCount * 8
+    // wraps in a 32-bit size_t (0x20000000 * 8 is 0), and so does the sum with the offset.
+    constexpr size_t kImage = 49152;
+
+    CHECK(wardenImportTableFits(0, 0, kImage));
+    CHECK(wardenImportTableFits(0, 1, kImage));
+    CHECK(wardenImportTableFits(static_cast<uint32_t>(kImage) - 8, 1, kImage));
+    CHECK_FALSE(wardenImportTableFits(static_cast<uint32_t>(kImage) - 7, 1, kImage));
+    CHECK_FALSE(wardenImportTableFits(0, static_cast<uint32_t>(kImage) / 8 + 1, kImage));
+
+    // Counts that wrap to a small byte size.
+    CHECK_FALSE(wardenImportTableFits(0, 0x20000000u, kImage));
+    CHECK_FALSE(wardenImportTableFits(0, 0x20000001u, kImage));
+    CHECK_FALSE(wardenImportTableFits(16, 0xFFFFFFFFu, kImage));
+    // Offsets that wrap when the table is added.
+    CHECK_FALSE(wardenImportTableFits(0xFFFFFFF8u, 1, kImage));
+    CHECK_FALSE(wardenImportTableFits(0xFFFFFFFFu, 1, kImage));
 }
