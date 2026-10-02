@@ -59,6 +59,8 @@
 #include <openssl/sha.h>
 #include <zlib.h>
 
+#include "devpath_cases.hpp"
+
 extern "C" {
 #include "lauxlib.h"
 #include "lua.h"
@@ -400,6 +402,155 @@ static void sockets() {
     close(fd);
 }
 
+// --- VITA-35: the eight std::filesystem path call sites, with and without the helper ------------
+// Each probe line copies the expression a shared source file uses. "raw" is what libstdc++ gives,
+// "helper" is platform/vita/device_path.hpp. Run under the two working directories the app can
+// have: "app0:" (at launch) and a chdir'd "ux0:/data/...".
+static void probe_call_sites(const char* tag) {
+    namespace pv = wowee::platform::vita;
+    std::error_code ec;
+    char buf[300];
+    auto line = [&](const char* site, const char* what, const std::string& v) {
+        snprintf(buf, sizeof buf, "%s %s %s='%s' ec=%d", tag, site, what, v.c_str(), ec.value());
+        log_line("INFO devpath %s", buf);
+        ec.clear();
+    };
+    log_line("INFO devpath [%s] cwd='%s'", tag, fs::current_path(ec).string().c_str());
+    ec.clear();
+    // auth_screen.cpp:1008,1093  current_path() / relative, then exists()
+    line("auth_screen", "current_path()/rel", (fs::current_path(ec) / "assets/krayonsignin.png").string());
+    line("auth_screen", "current_path()/rel(2)", (fs::current_path(ec) / fs::path("assets") / "Original Music" / "T.mp3").string());
+    // config_paths.cpp:26-29  current == fs::path(root)
+    {
+        fs::path cur = fs::current_path(ec);
+        fs::path root = cur;  // the env root spelled exactly like the OS spells it
+        snprintf(buf, sizeof buf, "%s config_paths same-spelling equal=%d", tag, cur == root);
+        log_line("INFO devpath %s", buf);
+        std::string spelled = cur.string();
+        if (spelled.size() > 2 && spelled.back() != '/') spelled += "/";
+        else if (spelled.size() > 2) spelled.pop_back();
+        snprintf(buf, sizeof buf, "%s config_paths other-spelling '%s' raw-equal=%d helper-equal=%d", tag, spelled.c_str(),
+                 cur == fs::path(spelled), pv::resolveDevicePath(cur) == pv::resolveDevicePath(fs::path(spelled)));
+        log_line("INFO devpath %s", buf);
+    }
+    // addon_manager.cpp:145-146
+    for (const char* local : {"addons", "../addons", "../../addons"}) {
+        line("addon_manager", (std::string("raw absolute ") + local).c_str(), fs::absolute(local, ec).string());
+        line("addon_manager", (std::string("raw weakly_canonical(absolute) ") + local).c_str(),
+             fs::weakly_canonical(fs::absolute(local, ec), ec).string());
+        line("addon_manager", (std::string("helper ") + local).c_str(), pv::resolveDevicePath(fs::path(local)).string());
+    }
+    // opcode_table.cpp:106  weakly_canonical(path) as the cycle-detection key (the raw call takes no ec there)
+    for (const char* in : {"ux0:data/wowee/depcheck_dp/ops.json", "ux0:data/wowee/depcheck_dp/x/../ops.json", "ops.json"}) {
+        line("opcode_table", (std::string("raw weakly_canonical ") + in).c_str(), fs::weakly_canonical(in, ec).string());
+        line("opcode_table", (std::string("helper ") + in).c_str(), pv::resolveDevicePath(fs::path(in)).string());
+    }
+    // zone_manager.cpp:23  exists(rel) then canonical(rel)
+    {
+        fs::path rel = fs::path("assets") / "Original Music" / "T.mp3";
+        fs::path abs = fs::canonical(rel, ec);
+        line("zone_manager", "raw canonical (missing file)", abs.string());
+        if (fs::exists("eboot.bin")) line("zone_manager", "raw canonical (existing eboot.bin)", fs::canonical("eboot.bin", ec).string());
+        fs::create_directories("ux0:data/wowee/depcheck_dp/assets/Original Music", ec);
+        ec.clear();
+        { std::ofstream o("ux0:data/wowee/depcheck_dp/assets/Original Music/T.mp3"); o << "x"; }
+        fs::path cur = fs::current_path(ec);
+        fs::current_path("ux0:data/wowee/depcheck_dp", ec);
+        ec.clear();
+        line("zone_manager", "cwd now", fs::current_path(ec).string());
+        bool ex = fs::exists(rel, ec);
+        ec.clear();
+        fs::path abs2 = fs::canonical(rel, ec);
+        line("zone_manager", ex ? "raw canonical (file exists, cwd=depcheck_dp)" : "exists=0", abs2.string());
+        line("zone_manager", "helper", pv::resolveDevicePath(rel).string());
+        fs::current_path(cur, ec);
+        ec.clear();
+    }
+}
+
+static void devpath() {
+    namespace pv = wowee::platform::vita;
+    std::error_code ec;
+    devpath_cases::run([](const char* name, bool ok, const char* detail) {
+        check((std::string("devpath ") + name).c_str(), ok, detail);
+    });
+    // uma0: strings are lexical, no device needed.
+    check("devpath uma0: lexical", pv::resolveDevicePath("Data/../addons", "uma0:/wowee") == "uma0:/wowee/addons");
+
+    fs::create_directories("ux0:data/wowee/depcheck_dp", ec);
+    ec.clear();
+    fs::path start = fs::current_path(ec);
+    ec.clear();
+    probe_call_sites("cwd=app0");
+    fs::current_path("ux0:data/wowee/depcheck_dp", ec);
+    ec.clear();
+    probe_call_sites("cwd=ux0-chdir");
+    fs::current_path(start, ec);
+    ec.clear();
+
+    // helper vs the real thing: the helper's answer must be openable.
+    {
+        fs::path want = "ux0:data/wowee/depcheck_dp/ops.json";
+        { std::ofstream o(want); o << "{}"; }
+        fs::path got = pv::resolveDevicePath(fs::path("ux0:data/wowee/depcheck_dp/x/../ops.json"));
+        check("devpath helper result opens", std::ifstream(got).is_open(), got.string().c_str());
+        // spelling variants must collapse to one key (opcode_table cycle check)
+        check("devpath one key per file (cwd=app0)",
+              pv::resolveDevicePath(fs::path("ux0:data/wowee/depcheck_dp/x/../ops.json")) ==
+              pv::resolveDevicePath(fs::path("ux0:/data/wowee/depcheck_dp/ops.json")));
+    }
+
+    // addon_manager.cpp:131  fs::equivalent(entry, asked) on two DIFFERENT existing files/dirs.
+    {
+        fs::create_directories("ux0:data/wowee/depcheck_dp/d1", ec);
+        fs::create_directories("ux0:data/wowee/depcheck_dp/d2", ec);
+        ec.clear();
+        bool diff = fs::equivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:data/wowee/depcheck_dp/d2", ec);
+        int e1 = ec.value();
+        ec.clear();
+        bool same = fs::equivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:data/wowee/depcheck_dp/d1", ec);
+        int e2 = ec.value();
+        ec.clear();
+        bool same2 = fs::equivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:/data/wowee/depcheck_dp/d1/", ec);
+        char b[200];
+        snprintf(b, sizeof b, "different=%d(ec=%d) same=%d(ec=%d) same-other-spelling=%d", diff, e1, same, e2, same2);
+        check("devpath fs::equivalent distinguishes two dirs", !diff, b);
+        ec.clear();
+    }
+
+    // removeTree: non-empty tree, the case where fs::remove_all hangs.
+    {
+        fs::path t = "ux0:data/wowee/depcheck_dp/tree";
+        fs::create_directories(t / "a" / "b", ec);
+        { std::ofstream o(t / "x.bin"); o << "x"; }
+        { std::ofstream o(t / "a" / "y.bin"); o << "y"; }
+        { std::ofstream o(t / "a" / "b" / "z.bin"); o << "z"; }
+        ec.clear();
+        auto n = pv::removeTree(t, ec);
+        char b[100];
+        snprintf(b, sizeof b, "removed=%lu ec=%d", static_cast<unsigned long>(n), ec.value());
+        check("devpath removeTree (non-empty tree)", !ec && n == 6 && !fs::exists(t), b);
+        ec.clear();
+    }
+
+    // uma0: I/O, only if the device is mounted (Vita3K usually has no uma0:).
+    {
+        fs::create_directories("uma0:data/wowee/depcheck_dp", ec);
+        if (ec || !fs::exists("uma0:data/wowee/depcheck_dp")) {
+            log_line("SKIP devpath uma0: I/O (device not mounted: %s)", ec.message().c_str());
+        } else {
+            { std::ofstream o("uma0:data/wowee/depcheck_dp/a.txt"); o << "x"; }
+            fs::path got = pv::resolveDevicePath(fs::path("uma0:data/wowee/depcheck_dp/../depcheck_dp/a.txt"));
+            check("devpath uma0: helper result opens", std::ifstream(got).is_open(), got.string().c_str());
+            pv::removeTree("uma0:data/wowee/depcheck_dp", ec);
+        }
+        ec.clear();
+    }
+
+    pv::removeTree("ux0:data/wowee/depcheck_dp", ec);
+    check("devpath cleanup", !fs::exists("ux0:data/wowee/depcheck_dp"));
+}
+
 // --- libraries ---------------------------------------------------------------------------
 // Runs last: libstdc++'s fs::remove_all() loops forever on Vita3K for a non-empty tree (it keeps
 // calling sceIoRemove on the directory, which answers "Directory not empty"). If the app never logs
@@ -505,6 +656,7 @@ int main() {
     guarded("printf_formats", printf_formats);
     guarded("threads", threads);
     guarded("filesystem", filesystem);
+    guarded("devpath", devpath);
     guarded("libraries", libraries);
     guarded("sockets", sockets);
     log_line("depcheck done: %d failure(s) before the remove_all test", g_fail);

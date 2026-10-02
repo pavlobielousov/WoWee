@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#if defined(__vita__)
+#include "platform/vita/device_path.hpp"
+#endif
 #include <string_view>
 #include <unordered_set>
 
@@ -103,7 +106,12 @@ static bool loadOpcodeJsonRecursive(const std::filesystem::path& path,
                                     std::unordered_map<uint16_t, uint16_t>& logicalToWire,
                                     std::unordered_map<uint16_t, uint16_t>& wireToLogical,
                                     std::unordered_set<std::string>& loadingStack) {
+#if defined(__vita__)
+    // weakly_canonical() fails on "ux0:" paths (VITA-35); the key must still be one string per file.
+    const std::filesystem::path canonicalPath = platform::vita::resolveDevicePath(path);
+#else
     const std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(path);
+#endif
     const std::string canonicalKey = canonicalPath.string();
     if (!loadingStack.insert(canonicalKey).second) {
         LOG_WARNING("OpcodeTable: inheritance cycle at ", canonicalKey);

@@ -19,6 +19,7 @@ add_library(lua51 STATIC ${LUA_SRC})
 target_include_directories(lua51 SYSTEM PUBLIC ${LUA_DIR})
 
 add_executable(depcheck main.cpp)
+target_include_directories(depcheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../include)
 target_link_libraries(depcheck lua51 ssl crypto z pthread
   SceIofilemgr_stub SceLibKernel_stub SceSysmodule_stub SceNet_stub SceNetCtl_stub)
 
