@@ -13,7 +13,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "audio/player_voice_manager.hpp"
-#include "core/application.hpp"
 #include "core/logger.hpp"
 #include "game/sell_count.hpp"
 #include "network/world_socket.hpp"

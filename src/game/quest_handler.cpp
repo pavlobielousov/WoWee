@@ -14,7 +14,6 @@
 #include "audio/audio_coordinator.hpp"
 #include "audio/ui_sound_manager.hpp"
 #include "pipeline/asset_manager.hpp"
-#include "core/application.hpp"
 #include "core/logger.hpp"
 #include <algorithm>
 #include <cctype>

@@ -84,5 +84,11 @@ private:
     bool loadProfile(const std::string& jsonPath, const std::string& dirPath);
 };
 
+/// The registry the running client uses, for helpers that have no GameServices to ask
+/// (game_utils.hpp). Set by Application once the registry exists and cleared before it
+/// goes; null when there is none.
+void setActiveExpansionRegistry(ExpansionRegistry* registry);
+ExpansionRegistry* getActiveExpansionRegistry();
+
 } // namespace game
 } // namespace wowee

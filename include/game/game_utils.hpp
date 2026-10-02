@@ -2,7 +2,6 @@
 
 #include "game/expansion_profile.hpp"
 #include "game/item_text.hpp"
-#include "core/application.hpp"
 
 #include <cstdint>
 
@@ -10,8 +9,7 @@ namespace wowee {
 namespace game {
 
 inline bool isActiveExpansion(const char* expansionId) {
-    auto& app = core::Application::getInstance();
-    auto* registry = app.getExpansionRegistry();
+    auto* registry = getActiveExpansionRegistry();
     if (!registry) return false;
     auto* profile = registry->getActive();
     if (!profile) return false;
