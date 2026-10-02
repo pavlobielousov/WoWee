@@ -5,6 +5,7 @@
 #include "core/config_paths.hpp"
 #include "core/env.hpp"
 #include "core/logger.hpp"
+#include "core/thread_budget.hpp"
 
 #include <psp2/io/stat.h>
 #include <psp2/net/net.h>
@@ -93,6 +94,7 @@ void logStartupReport() {
     const char* data = std::getenv("WOW_DATA_PATH");
     LOG_WARNING("Vita: data root   ", data ? data : "(unset)");
     LOG_WARNING("Vita: config root ", core::getConfigRoot());
+    core::enterThread(core::ThreadRole::Main);
 }
 
 }  // namespace wowee::platform::vita

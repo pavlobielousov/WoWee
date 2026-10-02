@@ -1,5 +1,6 @@
 #include "network/world_socket.hpp"
 #include "core/env_flag.hpp"
+#include "core/thread_budget.hpp"
 #include "network/packet.hpp"
 #include "network/net_platform.hpp"
 #include "game/opcode_table.hpp"
@@ -457,6 +458,7 @@ void WorldSocket::stopAsyncPump() {
 }
 
 void WorldSocket::asyncPumpLoop() {
+    core::enterThread(core::ThreadRole::NetworkPump);
     asyncPumpRunning_.store(true, std::memory_order_release);
     while (!asyncPumpStop_.load(std::memory_order_acquire)) {
         pumpNetworkIO();

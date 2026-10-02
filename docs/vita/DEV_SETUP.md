@@ -334,3 +334,60 @@ resolved data and config roots. `vita3k_macos.sh` deletes `*.log` in that direct
 Not built yet, so no Vita arms yet: `core/open_url.cpp` (shells out to `xdg-open`), `https_get.cpp` / `update_check.cpp`, `screen_recorder.cpp`,
 `platform/process.hpp` (POSIX `kill`/`waitpid`) and `memory_monitor.cpp` (`<sys/sysinfo.h>`, VITA-23). They are outside the Vita source list, which
 is how they are "compiled out"; give each its arm in the item that adds it to the list.
+
+## 13. Threads: budget, cores, priorities, stacks (VITA-8) *(verified on Vita3K; hardware is VITA-34)*
+
+`include/core/thread_budget.hpp` (platform-neutral; off the Vita it returns what the caller computed and does nothing) and
+`src/platform/vita/vita_threads.cpp`. Two calls: `core::platformWorkerCount(role, desktopValue)` for how many threads (or tasks in flight) a
+role gets, and `core::enterThread(role)`, the first line of a thread body, which pins the thread to its cores and sets its priority.
+
+| Role | Count | Cores (`SCE_KERNEL_CPU_MASK_USER_*`) | Priority (lower runs first) |
+|---|---|---|---|
+| main | 1 | 0 | 160 (system default) |
+| network pump | 1 | 1 | 112 |
+| frame workers (`ThreadPool::frameWorkers`) | 1 | 1+2 | 176 |
+| I/O workers (`ioWorkers`) | 1 | 1+2 | 184 |
+| terrain workers | 1 | 2 | 184 |
+| world preload | 1 | 2 | 188 |
+| update check | 1 | 2 | 188 |
+| watchdog | **0** (no thread: it only releases a desktop mouse grab) | - | - |
+| async creature / game object / equipment loads (in flight) | 1 each | 2 | 184 / 184 / 186 |
+
+No role ever gets the system core (core 3, `SCE_KERNEL_CPU_MASK_SYSTEM`). `WOWEE_TERRAIN_WORKERS` is not overridden on the Vita: it is
+applied inside `computeTerrainWorkerCount` before the budget is asked, and the budget still caps it at 1, so an env.txt value has no effect
+(`m2_renderer`, `wmo_renderer` and `character_renderer` keep their own `hardware_concurrency` formulas, because the Vulkan renderer does not
+build on the Vita and `rendering/` is left alone). The priorities are a first guess and need tuning on hardware.
+
+**Stacks.** pthread-embedded gives every `std::thread` a **32 KB stack** and libstdc++ never asks for more (measured, Vita3K). The ADT / M2 /
+WMO / BLP parsers run on worker threads, so `vita_threads.cpp` defines `__wrap_pthread_create` and the link has `-Wl,--wrap=pthread_create`
+(`cmake/vita/Vita.cmake`): any stack below `WOWEE_VITA_THREAD_STACK_KB` (default 512, a compile definition) is raised to it, a bigger request is
+left alone. **Every Vita executable that starts threads needs this link option** (like `-Wl,-u,pthread_cancel` and `vita_cxa_guard.cpp`).
+Cost: 512 KB per thread of app memory, about 4 MB for the layout above. `std::async` tasks get it too.
+
+**Probe: `tools/vita/threadcheck/`** (own CMake project, links the real `vita_threads.cpp` and the platform layer). Build and run:
+`SRC=tools/vita/threadcheck BUILD=build-vita/threadcheck tools/vita/build.sh`, then
+`tools/vita/vita3k_macos.sh build-vita/threadcheck/threadcheck.vpk THRC00001 --seconds 14`; results are in `build-vita/logs/THRC00001.app.log`
+(`threadcheck.log`: raw kernel values per thread and per role) and the `Vita thread:` lines in `wowee.log`. A file
+`ux0:data/wowee/threadcheck.recurse` in the Vita3K data dir adds the stack-exhaustion test (ends in a crash on purpose; the last
+`recurse.depth_kb` line is how deep it got). Delete `vita3k*.log` after each run.
+
+Measured on Vita3K (`[v3k]`; **the same on hardware is VITA-34**):
+
+| Fact | Value |
+|---|---|
+| `std::thread::hardware_concurrency()` | 0 |
+| Default stack: main thread / `std::thread` / raw pthread with no attr | 256 KB reported (the app sets 4 MB through `sceUserMainThreadStackSize`, the emulator still reports 256 KB) / **32 KB** / 32 KB |
+| With the wrap: `std::thread` stack, and recursion in one | 512 KB; 1 KB frames reached depth 512, then the process ended |
+| Default priority: main / new `std::thread` | 160 / the creator's priority (159 to 191 seen) |
+| `sceKernelChangeThreadCpuAffinityMask` with one user core, two cores, `USER_ALL` | succeeds, read back exactly (`0x10000`, `0x20000`, `0x40000`, `0x70000`) |
+| Same call with `SCE_KERNEL_CPU_MASK_SYSTEM` (core 3) | **refused**, `0x80028025`, mask unchanged |
+| A new thread's initial affinity | 0 (= no restriction, `cpu_now` reads `0x70000`) |
+| `sceKernelChangeThreadPriority` from inside the thread | succeeds (96, 112, 176 ... read back) |
+| `pthread_attr_getstacksize` of a fresh attr | 0 (so "below the wanted size" must include 0) |
+
+Vita3K does not schedule on real cores, so **only the API results are meaningful here, not that the threads run where they were told**.
+
+**One unexplained hang:** a first `LOG_WARNING` in a probe built `-O1` with no `Logger::setLogLevel` call stopped the process right after the
+"writing the log to ..." line (no crash message in the emulator log). With the real app's flags (`-O2 -ffunction-sections`, `--gc-sections`) and
+`setLogLevel(WARNING)` as `main.cpp` does, it works, and the real `wowee.vpk` always did. Cause not found; if the logger ever stops
+mid-startup in a new Vita executable, start there.

@@ -2184,6 +2184,12 @@ register_test_target(test_m2_color_track)
 wowee_add_test(test_size_utils
     SOURCES test_size_utils.cpp)
 
+# ── test_thread_budget ───────────────────────────────────────
+# platformWorkerCount / enterThread must be identity / no-ops off the Vita, and
+# ThreadPool must keep working with a role. Header only.
+wowee_add_test(test_thread_budget
+    SOURCES test_thread_budget.cpp)
+
 # ── test_dbc_layout_columns ──────────────────────────────────
 # Every column a layout names has to exist in the file it describes. A DBC
 # asked for a field past the end answers zero for every row, forever, which

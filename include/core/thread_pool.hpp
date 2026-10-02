@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/thread_budget.hpp"
+
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -27,10 +29,13 @@ namespace core {
 // so the queue always drains and such waits always complete.
 class ThreadPool {
 public:
-    explicit ThreadPool(size_t threadCount) {
+    explicit ThreadPool(size_t threadCount, ThreadRole role = ThreadRole::FrameWorker) {
         workers_.reserve(threadCount);
         for (size_t i = 0; i < threadCount; ++i) {
-            workers_.emplace_back([this]() { workerLoop(); });
+            workers_.emplace_back([this, role]() {
+                enterThread(role);
+                workerLoop();
+            });
         }
     }
 
@@ -50,14 +55,14 @@ public:
 
     // Shared pool for per-frame render/update work, sized for the machine.
     static ThreadPool& frameWorkers() {
-        static ThreadPool pool(defaultThreadCount());
+        static ThreadPool pool(platformWorkerCount(ThreadRole::FrameWorker, defaultThreadCount()));
         return pool;
     }
 
     // Small, separate pool for blocking filesystem work. Keeping it distinct from
     // frameWorkers prevents a slow disk read from occupying render/update workers.
     static ThreadPool& ioWorkers() {
-        static ThreadPool pool(2);
+        static ThreadPool pool(platformWorkerCount(ThreadRole::IoWorker, 2), ThreadRole::IoWorker);
         return pool;
     }
 

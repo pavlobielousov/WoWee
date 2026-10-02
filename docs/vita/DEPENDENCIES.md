@@ -141,6 +141,7 @@ arm in those two functions (`#elif defined(__vita__)` returning failure) rather 
   app may use, so VITA-8 should pass an explicit count), `m2_renderer.cpp:504`, `wmo_renderer.cpp:192` and `character_renderer.cpp:342` fall back to 1
   (`hc > 1 ? hc - 1 : 1`), and `terrain_manager.cpp:116` skips its tuning when 0.
 - **`std::thread` works only with the link flag in G1.**
+- **Stack and affinity (VITA-8, `[v3k]`).** A `std::thread` gets a 32 KB stack; `pthread_create` is wrapped at link time to raise it (see `DEV_SETUP.md` section 13). `sceKernelChangeThreadCpuAffinityMask` and `sceKernelChangeThreadPriority` work and the system core (mask `0x80000`) is refused. Whether a real device behaves the same is `[hw?]`.
 - 4 threads, `condition_variable`, `shared_mutex`, `std::async`, `thread_local`, and `atomic::wait/notify` all behave `[v3k]`.
 - `thread_local` appears in 10 files `[grep]`. It works on a second thread; it uses emulated TLS from libgcc (the link needs `pthread_key_create`), which is the
   same dependency as G1.
