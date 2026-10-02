@@ -161,12 +161,6 @@ uint32_t AnimationController::getEmoteAnimByEmotesId(uint32_t emoteId) {
     return registry.animByEmotesId(emoteId);
 }
 
-bool AnimationController::isStateEmoteById(uint32_t emoteId) {
-    auto& registry = EmoteRegistry::instance();
-    registry.loadFromDbc();
-    return registry.isStateEmote(emoteId);
-}
-
 // ── Spell casting ────────────────────────────────────────────────────────────
 
 void AnimationController::startSpellCast(uint32_t precastAnimId, uint32_t castAnimId, bool castLoop,

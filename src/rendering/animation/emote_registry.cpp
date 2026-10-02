@@ -3,7 +3,6 @@
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
-#include "core/application.hpp"
 #include "core/logger.hpp"
 
 #include <algorithm>
@@ -128,7 +127,7 @@ void EmoteRegistry::loadFromDbc() {
     if (loaded_) return;
     loaded_ = true;
 
-    auto* assetManager = core::Application::getInstance().getAssetManager();
+    auto* assetManager = assets_;
     if (!assetManager) {
         LOG_WARNING("Emotes: no AssetManager");
         loadFallbackEmotes();
