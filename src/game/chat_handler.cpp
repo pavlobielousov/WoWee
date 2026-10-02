@@ -10,7 +10,6 @@
 #include "game/entity.hpp"
 #include "game/opcode_table.hpp"
 #include "network/world_socket.hpp"
-#include "rendering/renderer.hpp"
 #include "rendering/animation/emote_registry.hpp"
 #include "core/logger.hpp"
 #include "core/app_clock.hpp"

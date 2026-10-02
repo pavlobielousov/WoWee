@@ -4,8 +4,7 @@
 #include "game/transport_clock_sync.hpp"
 #include "game/transport_animator.hpp"
 #include "game/game_utils.hpp"
-#include "rendering/wmo_renderer.hpp"
-#include "rendering/m2_renderer.hpp"
+#include "game/transport_render_target.hpp"
 #include "rendering/movement_limits.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
@@ -487,7 +486,7 @@ void TransportManager::applyServerRouteClock(uint64_t transportGuid, float phase
 }
 
 void TransportManager::applyDoodadMotionState(ActiveTransport& transport, bool moving) {
-    if (transport.isM2 || !wmoRenderer_ || transport.wmoInstanceId == 0) return;
+    if (transport.isM2 || !wmoTarget_ || transport.wmoInstanceId == 0) return;
 
     // 163 = ShipMoving, 164 = ShipStop. Stopping is a one-shot that settles into
     // the model's idle pose; running is a loop.
@@ -499,29 +498,29 @@ void TransportManager::applyDoodadMotionState(ActiveTransport& transport, bool m
     if (sameState && transport.appliedDoodadCount != 0) return;
 
     const size_t touched =
-        wmoRenderer_->setInstanceDoodadAnimation(transport.wmoInstanceId, want, moving);
+        wmoTarget_->setInstanceDoodadAnimation(transport.wmoInstanceId, want, moving);
     transport.appliedDoodadAnim = static_cast<int>(want);
     transport.appliedDoodadCount = touched;
 }
 
 bool TransportManager::isTransportCollisionReady(uint64_t transportGuid) const {
-    if (!wmoRenderer_) return false;
+    if (!wmoTarget_) return false;
     const auto it = transports_.find(transportGuid);
     if (it == transports_.end() || it->second.isM2 || it->second.wmoInstanceId == 0) {
         return false;
     }
-    return wmoRenderer_->instanceHasCollisionGeometry(it->second.wmoInstanceId);
+    return wmoTarget_->instanceHasCollisionGeometry(it->second.wmoInstanceId);
 }
 
 std::optional<bool> TransportManager::isPointOverM2Footprint(
     uint64_t transportGuid, const glm::vec3& canonicalPosition) const {
-    if (!m2Renderer_) return std::nullopt;
+    if (!m2Target_) return std::nullopt;
     const auto it = transports_.find(transportGuid);
     if (it == transports_.end() || !it->second.isM2 || it->second.wmoInstanceId == 0) {
         return std::nullopt;
     }
     glm::vec3 boundsMin, boundsMax;
-    if (!m2Renderer_->getInstanceWorldBounds(it->second.wmoInstanceId, boundsMin, boundsMax)) {
+    if (!m2Target_->getInstanceWorldBounds(it->second.wmoInstanceId, boundsMin, boundsMax)) {
         return std::nullopt;
     }
     // The bounds are the renderer's, so the point has to be too.
@@ -541,7 +540,7 @@ std::optional<bool> TransportManager::isPointOverM2Footprint(
     // The answer is whether the car's own floor is under the feet. Outside the
     // door there is nothing below but shaft, so the ray finds nothing and the
     // board is refused; on the deck it lands within a step and it is allowed.
-    const auto deck = m2Renderer_->getInstanceFloorHeight(
+    const auto deck = m2Target_->getInstanceFloorHeight(
         it->second.wmoInstanceId, render.x, render.y,
         render.z + rendering::movement::kMaxStepUp);
     if (!deck) return false;
@@ -552,7 +551,7 @@ std::optional<bool> TransportManager::isPointOverM2Footprint(
 std::optional<float> TransportManager::getTransportDeckFloorHeight(
     uint64_t transportGuid,
     const glm::vec3& canonicalPosition) const {
-    if (!wmoRenderer_) return std::nullopt;
+    if (!wmoTarget_) return std::nullopt;
     const auto it = transports_.find(transportGuid);
     if (it == transports_.end() || it->second.isM2 || it->second.wmoInstanceId == 0) {
         return std::nullopt;
@@ -560,7 +559,7 @@ std::optional<float> TransportManager::getTransportDeckFloorHeight(
 
     const glm::vec3 renderPosition = core::coords::canonicalToRender(canonicalPosition);
     float normalZ = 0.0f;
-    const auto floor = wmoRenderer_->getInstanceFloorHeight(
+    const auto floor = wmoTarget_->getInstanceFloorHeight(
         it->second.wmoInstanceId,
         renderPosition.x, renderPosition.y, renderPosition.z + 0.35f,
         &normalZ);
@@ -672,23 +671,23 @@ void TransportManager::setInstanceHidden(const ActiveTransport& transport, bool 
     // Only WMO hulls. An M2 transport is a tram car or a lift, which never
     // leaves its map, so onThisMap is always true for one and this is never
     // asked to hide it.
-    if (!transport.isM2 && wmoRenderer_) {
-        wmoRenderer_->setInstanceHidden(transport.wmoInstanceId, hidden);
+    if (!transport.isM2 && wmoTarget_) {
+        wmoTarget_->setInstanceHidden(transport.wmoInstanceId, hidden);
     }
 }
 
 void TransportManager::pushTransform(ActiveTransport& transport) {
     setInstanceHidden(transport, !transport.onThisMap);
     if (transport.isM2) {
-        if (m2Renderer_) m2Renderer_->setInstanceTransform(transport.wmoInstanceId, transport.transform);
+        if (m2Target_) m2Target_->setInstanceTransform(transport.wmoInstanceId, transport.transform);
     } else {
-        if (wmoRenderer_) {
-            wmoRenderer_->setInstanceTransform(transport.wmoInstanceId, transport.transform);
+        if (wmoTarget_) {
+            wmoTarget_->setInstanceTransform(transport.wmoInstanceId, transport.transform);
             // Tell the static-world floor query this deck is in motion, so it
             // only counts as a floor when it is underfoot. Set here rather than
             // once at register so it survives an instance rebuild from
             // streaming - the call is idempotent and cheap.
-            wmoRenderer_->setInstanceIsTransport(transport.wmoInstanceId, true);
+            wmoTarget_->setInstanceIsTransport(transport.wmoInstanceId, true);
         }
     }
 }

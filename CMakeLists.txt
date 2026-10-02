@@ -983,6 +983,7 @@ set(WOWEE_SOURCES
     src/rendering/renderer_screen_effects.cpp
     src/rendering/renderer_player_pose.cpp
     src/rendering/renderer_spell_visuals.cpp
+    src/rendering/renderer_transport_targets.cpp
     src/rendering/overlay_system.cpp
     src/rendering/animation_controller.cpp
     src/rendering/animation/animation_ids.cpp
