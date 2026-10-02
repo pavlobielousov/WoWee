@@ -79,6 +79,11 @@ target_link_options(wowee PRIVATE -Wl,-u,pthread_cancel)
 # raise it (VITA-8). Every Vita executable that starts threads needs both.
 target_link_options(wowee PRIVATE -Wl,--wrap=pthread_create)
 
+# sceUserMainThreadStackSize (vita_main.cpp) is read by the loader from the ELF, but nothing in the
+# program references it, so --gc-sections removed it and the main thread kept its 256 KB stack
+# (measured on hardware, VITA-8). -u keeps it.
+target_link_options(wowee PRIVATE -Wl,-u,sceUserMainThreadStackSize)
+
 # UNSAFE: extended memory and some sysmodules.
 vita_create_self(eboot.bin wowee UNSAFE)
 vita_create_vpk(wowee.vpk ${WOWEE_VITA_TITLEID} eboot.bin

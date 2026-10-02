@@ -27,7 +27,7 @@ add_executable(threadcheck main.cpp
 target_include_directories(threadcheck PRIVATE ${ROOT}/include)
 target_link_libraries(threadcheck pthread SceIofilemgr_stub SceLibKernel_stub SceNet_stub SceNetCtl_stub SceSysmodule_stub ScePower_stub)
 # See tools/vita/depcheck/CMakeLists.txt: std::thread needs this on GCC 15.
-target_link_options(threadcheck PRIVATE -Wl,-u,pthread_cancel -Wl,--wrap=pthread_create)
+target_link_options(threadcheck PRIVATE -Wl,-u,pthread_cancel -Wl,--wrap=pthread_create -Wl,-u,sceUserMainThreadStackSize)
 
 vita_create_self(eboot.bin threadcheck UNSAFE)
 vita_create_vpk(threadcheck.vpk ${VITA_TITLEID} eboot.bin

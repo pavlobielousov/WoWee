@@ -102,6 +102,10 @@ static void placementPhase(const char* name, const std::vector<int>& cores) {
 }
 
 static void placementTest() {
+    // The busy threads run at the creator's priority (159), which beats main's 160: with every
+    // user core busy, main would never wake to stop them (found on hardware, first run hung in
+    // phase 4). Main goes above them for the test.
+    sceKernelChangeThreadPriority(sceKernelGetThreadId(), 100);
     const int c0 = SCE_KERNEL_CPU_MASK_USER_0, c1 = SCE_KERNEL_CPU_MASK_USER_1,
               c2 = SCE_KERNEL_CPU_MASK_USER_2, all = SCE_KERNEL_CPU_MASK_USER_ALL;
     placementPhase("one_thread_core1", {c1});          // the baseline: 100
