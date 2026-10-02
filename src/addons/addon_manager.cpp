@@ -144,9 +144,7 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
         }
     }
     std::error_code rec;
-    // Relative to the working directory, nearest first.
-    static constexpr const char* kLocalAddonDirs[] = {"addons", "../addons", "../../addons"};
-    for (const char* local : kLocalAddonDirs) {
+    for (const char* local : {"addons", "../addons", "../../addons"}) {
 #if defined(__vita__)
         // absolute() and weakly_canonical() mangle "ux0:" paths (VITA-35). "../" stops at the
         // device root, so two spellings can land on one directory: add each once.
