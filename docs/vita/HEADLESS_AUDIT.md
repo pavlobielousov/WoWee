@@ -45,6 +45,13 @@ Vita build constructs (audio classes keep their API, bodies empty; smallest diff
 Recommended unless the audio headers themselves pull in miniaudio (`audio_engine.hpp` is the
 suspect; not checked).
 
+**Resolved in VITA-46 (2026-10-03):** the audio headers only forward-declare miniaudio's types and only
+`src/audio/audio_engine.cpp` includes it, so the whole layer except that one file is clean. Option 1 won,
+in a smaller form than guessed: `src/platform/vita/audio_engine_null.cpp` is a silent `AudioEngine`
+(build it instead of `audio_engine.cpp`) whose `initialize()` returns false. `AudioCoordinator`
+already turns that into "audio disabled" (no managers, every getter null) and `game/` already
+null-checks all of them, so no `game/` file changes. The real Vita backend stays VITA-29.
+
 ## `game/` -> `ui/`
 
 `ui/framexml_takeover.hpp` includes only the standard library. `game/` uses four free functions:
