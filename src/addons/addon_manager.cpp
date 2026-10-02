@@ -144,16 +144,17 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
         }
     }
     std::error_code rec;
+    // Relative to the working directory, nearest first.
+    static constexpr const char* kLocalAddonDirs[] = {"addons", "../addons", "../../addons"};
+    for (const char* local : kLocalAddonDirs) {
 #if defined(__vita__)
-    // absolute() and weakly_canonical() mangle "ux0:" paths (VITA-35). "../" stops at the device
-    // root, so two spellings can land on one directory: add each once.
-    for (const char* local : {"addons", "../addons", "../../addons"}) {
+        // absolute() and weakly_canonical() mangle "ux0:" paths (VITA-35). "../" stops at the
+        // device root, so two spellings can land on one directory: add each once.
         const fs::path p = platform::vita::resolveDevicePath(fs::path(local));
         if (fs::is_directory(p, rec) && std::find(roots.begin(), roots.end(), p) == roots.end()) {
             roots.push_back(p);
         }
 #else
-    for (const char* local : {"addons", "../addons", "../../addons"}) {
         fs::path p = fs::absolute(local, rec);
         if (fs::is_directory(p, rec)) roots.push_back(fs::weakly_canonical(p, rec));
 #endif
