@@ -6,6 +6,10 @@
 #include <filesystem>
 #include <system_error>
 
+#if defined(__vita__)
+#include "platform/vita/vita_platform.hpp"
+#endif
+
 #if defined(_WIN32)
 #include <windows.h>
 #elif defined(__APPLE__)
@@ -44,6 +48,8 @@ std::string perUserConfigDir() {
 #if defined(_WIN32)
     const char* appdata = std::getenv("APPDATA");
     return appdata ? std::string(appdata) + "\\wowee" : ".";
+#elif defined(__vita__)
+    return platform::vita::kDefaultConfigRoot;
 #else
     const char* home = std::getenv("HOME");
     return home ? std::string(home) + "/.wowee" : ".";
@@ -64,6 +70,10 @@ std::string getExecutableDir() {
     }
     if (len == 0) return {};
     return fs::path(buf.substr(0, len)).parent_path().string();
+#elif defined(__vita__)
+    // No /proc/self/exe, and app0: is read-only: nothing is stored beside the executable, so
+    // there is no portable mode (config lives in ux0:data/wowee/config).
+    return {};
 #elif defined(__APPLE__)
     uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);

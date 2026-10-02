@@ -18,6 +18,9 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
+#ifdef __vita__
+#include "platform/vita/vita_platform.hpp"
+#endif
 
 namespace wowee {
 namespace core {
@@ -47,6 +50,9 @@ std::filesystem::path perUserLogDir() {
     if (const char* home = std::getenv("HOME"); home && *home) {
         return std::filesystem::path(home) / "Library" / "Logs" / "Wowee";
     }
+#elif defined(__vita__)
+    // No HOME or XDG here, and the application's own directory is read-only.
+    return platform::vita::kAppDir;
 #else
     if (const char* state = std::getenv("XDG_STATE_HOME"); state && *state) {
         return std::filesystem::path(state) / "wowee" / "logs";
@@ -128,10 +134,12 @@ void Logger::ensureFile() {
     // could be: by being asked to read a log and finding my own run in it.
     const char* logName = std::getenv("WOWEE_LOG_FILE");
     const std::string logFile = (logName && *logName) ? logName : "wowee.log";
+#ifndef __vita__  // the working directory is app0:, read-only; the fallback below is ux0:data/wowee
     if (!runningFromAppBundle()) {
         std::filesystem::create_directories("logs", ec);
         fileStream.open(std::string("logs/") + logFile, std::ios::out | std::ios::trunc);
     }
+#endif
 
     // Beside the working directory when that is writable, which is how this is
     // run from a checkout and where every tool expects to find it.
@@ -189,6 +197,9 @@ void Logger::emitLineLocked(LogLevel level, const std::string& rawMessage) {
     if (echoToStdout_) {
         std::cout << line.str() << '\n';
     }
+#ifdef __vita__
+    platform::vita::sendLogLine(line.str());
+#endif
 #ifdef __ANDROID__
     // stdout goes nowhere on Android and the file has to be pulled off the
     // device to be read, so every line also goes to logcat, where `adb logcat

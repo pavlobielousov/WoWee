@@ -1,4 +1,8 @@
+#if !defined(__vita__)
 #include "core/application.hpp"
+#else
+#include "platform/vita/vita_platform.hpp"
+#endif
 #include "core/config_paths.hpp"
 #include "core/logger.hpp"
 #include "core/version.hpp"
@@ -11,7 +15,9 @@
 
 #include "core/data_paths.hpp"
 #include <string>
+#if !defined(__vita__)
 #include <SDL3/SDL.h>
+#endif
 // SDLActivity loads libwowee.so and calls SDL_main, the name this header gives
 // main(). SDL2's SDL.h pulled it in; SDL3's does not, and without it the
 // library exports only main and the activity has nothing to call.
@@ -130,6 +136,10 @@ static void selectUserDataPath() {
 }
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
+#ifdef __vita__
+    // Before anything reads the environment: loads env.txt and sets the default data path.
+    wowee::platform::vita::initProcess();
+#endif
 #ifdef __ANDROID__
     // Everything after this opens its files relative to the working directory,
     // which on Android is not a directory that holds any of them.
@@ -228,6 +238,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
         constexpr const char* kPlatform = "macos";
 #elif defined(__linux__)
         constexpr const char* kPlatform = "linux";
+#elif defined(__vita__)
+        constexpr const char* kPlatform = "vita";
 #else
         constexpr const char* kPlatform = "unknown-platform";
 #endif
@@ -235,6 +247,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
         constexpr const char* kArch = "arm64";
 #elif defined(__x86_64__) || defined(_M_X64)
         constexpr const char* kArch = "x86-64";
+#elif defined(__arm__)
+        constexpr const char* kArch = "armv7";
 #else
         constexpr const char* kArch = "unknown-arch";
 #endif
@@ -244,6 +258,11 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
         // Seed portable config from the per-user location on first portable launch.
         wowee::core::migratePortableConfigIfNeeded();
 
+#ifdef __vita__
+        // The Application needs the Vulkan renderer, which the Vita build cannot link yet
+        // (VITA-9, VITA-12): stop after the startup path and say what it resolved.
+        wowee::platform::vita::logStartupReport();
+#else
         wowee::core::Application app;
 
         if (!app.initialize()) {
@@ -253,6 +272,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
 
         app.run();
         app.shutdown();
+#endif
 
         LOG_INFO("Application exited successfully");
 #if defined(__linux__) && !defined(__ANDROID__)

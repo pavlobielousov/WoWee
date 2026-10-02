@@ -1,6 +1,7 @@
 #!/bin/sh
-# Print UDP log lines sent by the Vita (see devcheck/main.c; the same sink is planned for WoWee).
-# Put "<this machine's LAN ip>[:port]" in ux0:data/wowee/loghost.txt on the Vita, then run this.
+# Print UDP log lines sent by the Vita.
+# WoWee: put WOWEE_LOG_UDP=<this machine's LAN ip>[:port] in ux0:data/wowee/env.txt.
+# devcheck: put "<ip>[:port]" in ux0:data/wowee/loghost.txt. Then run this.
 # BSD nc (macOS) and OpenBSD nc take `-u -l PORT`; traditional netcat needs `-p`.
 PORT="${1:-9999}"
 echo "listening for Vita logs on UDP $PORT (Ctrl-C to stop)"
