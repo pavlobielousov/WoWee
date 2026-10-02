@@ -25,6 +25,9 @@ tools/vita/build.sh                                   # repo root (the real targ
 SRC=tools/vita/devcheck BUILD=build-vita/devcheck tools/vita/build.sh   # the dev-loop test app
 ```
 
+What the toolchain and its libraries can and cannot do (C++20, threads, `std::filesystem`, printf, OpenSSL, per-dependency
+verdicts) is in [DEPENDENCIES.md](DEPENDENCIES.md); `tools/vita/depcheck/` is the probe behind it.
+
 `build-vita/` is not in the upstream `.gitignore` (shared file, left alone). Add it locally:
 `echo 'build-vita/' >> .git/info/exclude`.
 
