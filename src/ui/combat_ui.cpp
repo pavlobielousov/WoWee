@@ -773,7 +773,8 @@ void CombatUI::renderCombatLog(game::GameHandler& gameHandler,
     ImGui::SetNextWindowPos(ImVec2(160, 200), ImGuiCond_FirstUseEver);
 
     char title[64];
-    snprintf(title, sizeof(title), "Combat Log (%zu)###CombatLog", log.size());
+    // %zu is not supported by newlib (Vita): it prints "zu" and leaves the argument unconsumed.
+    snprintf(title, sizeof(title), "Combat Log (%llu)###CombatLog", static_cast<unsigned long long>(log.size()));
     if (!ImGui::Begin(title, &showCombatLog_)) {
         ImGui::End();
         return;
