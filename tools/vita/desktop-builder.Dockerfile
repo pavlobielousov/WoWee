@@ -1,7 +1,7 @@
-# Desktop builder for tools/vita/desktop_build.sh. A copy of upstream's container/builder-linux.Dockerfile
+# Desktop builder for tools/vita/desktop_check.sh. A copy of upstream's container/builder-linux.Dockerfile
 # (kept in sync by hand) with two changes: `ca-certificates` is added, because `git clone` of SDL3 over HTTPS
 # fails with "server certificate verification failed" under --no-install-recommends, and the upstream
-# entrypoint script is dropped (desktop_build.sh drives the build). Upstream's file is not edited.
+# entrypoint script is dropped (desktop_check.sh drives the build). Upstream's file is not edited.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive

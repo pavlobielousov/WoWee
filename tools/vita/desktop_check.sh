@@ -1,14 +1,14 @@
 #!/bin/sh
-# Desktop (Linux) build and test of WoWee in a container, to check that a Vita PR did not break the
+# Desktop (Linux) check of WoWee: configure, build and ctest in a container, to check that a Vita PR did not break the
 # desktop client. Nothing is installed on the host. Uses a copy of upstream's container/builder-linux.Dockerfile
 # (tools/vita/desktop-builder.Dockerfile; Ubuntu 24.04, SDL3 built from source, Vulkan, FFmpeg, ...), but not its run script, which is
 # Docker-only, copies the tree, clones the FSR SDKs and builds with LTO.
-#   tools/vita/desktop_build.sh image       # build the builder image (once, a few minutes)
-#   tools/vita/desktop_build.sh configure   # cmake configure into build-desktop/
-#   tools/vita/desktop_build.sh build       # configure if needed, then build (incremental)
-#   tools/vita/desktop_build.sh test        # ctest (needs a finished build)
-#   tools/vita/desktop_build.sh all         # image if missing, configure, build, test
-#   tools/vita/desktop_build.sh shell       # interactive shell in the builder
+#   tools/vita/desktop_check.sh image       # build the builder image (once, a few minutes)
+#   tools/vita/desktop_check.sh configure   # cmake configure into build-desktop/
+#   tools/vita/desktop_check.sh build       # configure if needed, then build (incremental)
+#   tools/vita/desktop_check.sh test        # ctest (needs a finished build)
+#   tools/vita/desktop_check.sh all         # image if missing, configure, build, test
+#   tools/vita/desktop_check.sh shell       # interactive shell in the builder
 # Env: MEMORY (default 10G, Apple container VMs get 1 GB otherwise), CPUS (default 8),
 #      BUILD_TYPE (default Release), CMAKE_ARGS (extra configure arguments).
 set -eu

@@ -192,8 +192,8 @@ Run this before a PR that changes shared C++ logic (VITA-5, VITA-12; not needed 
 and tests the Linux desktop client in a container, so nothing is installed on the host.
 
 ```sh
-tools/vita/desktop_build.sh all        # image if missing, configure, build, ctest (output in build-desktop/)
-tools/vita/desktop_build.sh build      # incremental rebuild; also: image, configure, test, shell
+tools/vita/desktop_check.sh all        # image if missing, configure, build, ctest (output in build-desktop/)
+tools/vita/desktop_check.sh build      # incremental rebuild; also: image, configure, test, shell
 ```
 
 - Image `wowee-desktop-builder` is built from `tools/vita/desktop-builder.Dockerfile`, a copy of upstream's
