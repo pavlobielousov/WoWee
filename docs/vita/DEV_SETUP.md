@@ -335,7 +335,7 @@ Not built yet, so no Vita arms yet: `core/open_url.cpp` (shells out to `xdg-open
 `platform/process.hpp` (POSIX `kill`/`waitpid`) and `memory_monitor.cpp` (`<sys/sysinfo.h>`, VITA-23). They are outside the Vita source list, which
 is how they are "compiled out"; give each its arm in the item that adds it to the list.
 
-## 13. Threads: budget, cores, priorities, stacks (VITA-8) *(verified on Vita3K; hardware is VITA-34)*
+## 13. Threads: budget, cores, priorities, stacks (VITA-8) *(probe verified on Vita3K and on a real Vita Slim; the client-level layout is VITA-34)*
 
 `include/core/thread_budget.hpp` (platform-neutral; off the Vita it returns what the caller computed and does nothing) and
 `src/platform/vita/vita_threads.cpp`. Two calls: `core::platformWorkerCount(role, desktopValue)` for how many threads (or tasks in flight) a
@@ -387,7 +387,24 @@ Measured on Vita3K (`[v3k]`; **the same on hardware is VITA-34**):
 | `sceKernelChangeThreadPriority` from inside the thread | succeeds (96, 112, 176 ... read back) |
 | `pthread_attr_getstacksize` of a fresh attr | 0 (so "below the wanted size" must include 0) |
 
-Vita3K does not schedule on real cores, so **only the API results are meaningful here, not that the threads run where they were told**.
+Vita3K does not schedule on real cores, so **only the API results are meaningful there, not that the threads run where they were told**.
+
+**Measured on a real Vita Slim (`[hw]`, 2026-10-02, threadcheck run over vitacompanion, VPK installed by hand in VitaShell; logs in `build-vita/logs-hw/`).** Same as Vita3K, except where noted:
+
+| Fact | Result |
+|---|---|
+| `hardware_concurrency()` | **0** |
+| `std::thread` stack with the wrapper | 512 KB; recursion with 1 KB frames reached depth 480, then the process crashed at the limit (so the usable stack matches). The unwrapped 32 KB default was **not** re-measured on hardware (the probe is always built with the wrapper) |
+| Affinity: one core, two cores, `USER_ALL`; priority 0x60 and back | all succeed and read back |
+| `SCE_KERNEL_CPU_MASK_SYSTEM` (core 3) | **refused**, `0x80028025`, mask unchanged |
+| Every role in the table above | cores, priority and 512 KB stack read back exactly as planned; the watchdog count is 0 |
+| Main thread at start | priority 160, affinity **`0x70000`** (Vita3K: 0), stack **reported as 256 KB** although `sceUserMainThreadStackSize` asks for 4 MB (same on Vita3K) |
+| New thread's initial priority | the creator's (159 in the probe), affinity 0 |
+
+Still open on hardware: whether the 4 MB main stack is honoured (needs recursion on the main thread; the info call may just report differently), whether the
+kernel really runs a thread on the core it was assigned under load (`cpu_now` in the probe is the affinity mask read back, **not** the core in use),
+the priorities under real load (they are guesses), and the 30-minute session without unbounded thread creation. All of those need the running client (VITA-9,
+VITA-10) and stay tasks on VITA-34. The deliberate-crash run leaves a `psp2core-*.psp2dmp` in `ux0:data/`; delete it when done.
 
 **A trap (cause unknown, VITA-42):** an executable that links `core/logger.cpp` and the platform layer but is built **without**
 `-ffunction-sections -fdata-sections` and `-Wl,--gc-sections` stops at its first `LOG_*` call, right after the "writing the log to ..." line (no
