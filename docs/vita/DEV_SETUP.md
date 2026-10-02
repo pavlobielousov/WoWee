@@ -218,7 +218,7 @@ tools/vita/desktop_check.sh build      # incremental rebuild; also: image, confi
 
 **Decision: cross-build the test targets for armhf (ARMv7, hard float, ILP32; the Vita's ABI) in the existing arm64 Linux
 container and run them with `qemu-arm` (qemu-user).** It works today, needs no host install, and found a real 32-bit bug
-on the first run. Follow-up implementation: VITA-38.
+on the first run. Implemented as `tools/vita/check32.sh` in VITA-38.
 
 Measured 2026-10-02 (Apple Silicon Mac, `container` VM with 10 GB / 8 CPUs; clean state):
 
@@ -237,14 +237,21 @@ What the 4 failures are:
 - `framexml_compiles`, `addon_xml_compiles`: not a 32-bit result. Their helper `framexml_compile_check` is not a `test_*` target, so the spike never built it, and they need `Data/interface`, which is absent (skipped, exit 77, on a desktop with data).
 - `sweep_guard` was excluded: it runs host Python sweeps, is not 32-bit relevant and exceeds a 120 s timeout there.
 
-Reproduce (from the WoWee root; `desktop_check.sh image` first if `wowee-desktop-builder` is missing):
+Run it (`tools/vita/check32.sh`, VITA-38; same shape as `desktop_check.sh`):
 
 ```sh
-container build -f tools/vita/check32/Dockerfile -t wowee-armhf tools/vita/check32
-container run --rm -i --memory 10G --cpus 8 --entrypoint /bin/bash -v "$PWD:/workspace" wowee-armhf -s < tools/vita/check32/run_spike.sh
+tools/vita/check32.sh all          # image if missing (builds wowee-desktop-builder first if needed), configure, build, test
+tools/vita/check32.sh test         # ctest only; CTEST_ARGS="-R warden" narrows it
+tools/vita/check32.sh shell        # a shell in the container; build output is build-armhf/ (add it to .git/info/exclude)
 ```
 
-Pitfalls found (all are encoded in the files above):
+**Baseline (2026-10-02, `vita` at VITA-39, from a clean state):** 213 test executables built, **217 tests, 0 failed**, 2 skipped (`framexml_compiles`, `addon_xml_compiles`: exit 77 because `Data/interface` is absent, the same as on a desktop without game data). ctest takes about 18 s (slowest `settings_apply_on_load`, 17 s); an incremental build with nothing to do is under 1 s. Any failure is a regression. The script exits non-zero on a failing test (checked by breaking one on purpose: exit 8).
+
+Excluded on purpose, in `EXCLUDE_TESTS` in the script: `extract_progress` (an asset-extraction test; needs an armhf StormLib the image does not have, not used on the Vita) and `sweep_guard` (host Python sweeps, not 32-bit relevant, exceeds a 120 s timeout under emulation). The targets to build are read from `ctest --show-only=json-v1`, so a new test needs no edit; helper executables such as `framexml_compile_check` are built too.
+
+The Dockerfile pins the host's apt sources to `dpkg --print-architecture`, so it should also build on an amd64 Linux runner (armhf packages come from ports.ubuntu.com either way). **Verified on arm64 only**; the CI job (VITA-31) is where that gets checked.
+
+Pitfalls found (all are encoded in `tools/vita/check32/` and `check32.sh`):
 - CMake silently picks the **arm64** `libssl`, `libz` and `libvulkan` from `/usr/lib/aarch64-linux-gnu` unless their armhf paths are given explicitly; the link then fails with "file format not recognized". The root CMake also makes the 23 packet tests link `Vulkan::Vulkan`, so an empty armhf `libvulkan.so` stub is used (no Vulkan code is compiled or run in those tests).
 - The configure fails on SDL3 until an armhf SDL3 exists. SDL refuses to configure with no video backend unless `-DSDL_UNIX_CONSOLE_BUILD=ON`.
 - With `dpkg --add-architecture armhf` the arm64 apt sources must be pinned to `Architectures: arm64`, otherwise `apt-get update` looks for armhf on the wrong mirror.
