@@ -56,20 +56,25 @@ What matters is which of them WoWee uses, and whether those *work* on newlib, no
 and WoWee's include paths, with desktop-only inputs stood in: the Khronos Vulkan headers (untracked, in
 `build-vita/vulkan-headers`), the vendored ImGui and vk-bootstrap submodules, and a generated `version.hpp`.
 
-| Directory | Files | Parse OK | Notes |
-|---|---|---|---|
-| `auth`, `network`, `math` | 15 | **15** | Parse without any edit. This is the headless-core base (VITA-9) `[sweep]` |
-| `pipeline` | 170 | **170** | asset loading is Vulkan-free `[sweep]` |
-| `addons` (Lua API), `audio` | 26 | 26 | `[sweep]` |
-| `core` | 28 | 27 | `memory_monitor.cpp`: `<sys/sysinfo.h>` does not exist on Vita |
-| `game` | 46 | 45 | `warden_module.cpp`: needs OpenSSL 3 `param_build.h` (Warden is dropped) |
-| `ui`, `rendering` | 160 | 159 | `amd_fsr3_framegen_probe.cpp`: FSR3 SDK header (optional, off) |
-| **Total** | **445** | **442** | |
+| Directory | Files | With Vulkan headers | **Without** Vulkan headers | Notes |
+|---|---|---|---|---|
+| `auth`, `network`, `math` | 15 | 15 | **15** | The headless-core base (VITA-9): parses with no edit and no Vulkan `[sweep]` |
+| `pipeline` | 170 | 170 | **170** | Asset loading is Vulkan-free, confirmed by the run without the headers `[sweep]` |
+| `audio` | 13 | 13 | **13** | Vulkan-free |
+| `addons` (Lua API) | 13 | 13 | 6 | 7 files reach `vulkan.h` through other headers |
+| `core` | 28 | 27 | 13 | 14 reach `vulkan.h`; `memory_monitor.cpp` needs `<sys/sysinfo.h>` (G4) |
+| `game` | 46 | 45 | 30 | 15 reach `vulkan.h`; `warden_module.cpp` needs OpenSSL 3 `param_build.h` (Warden is dropped) |
+| `ui` | 64 | 64 | 25 | 39 reach `vulkan.h` (this is VITA-12's work) |
+| `rendering` | 96 | 95 | 31 | 65 reach `vulkan.h`; `amd_fsr3_framegen_probe.cpp` needs an FSR3 SDK header (optional, off) |
+| **Total** | **445** | **442** | **303** | 139 files stop at `vulkan/vulkan.h`; the other 3 failures are the ones named above |
+
+The "without" column is the honest measure for a Vulkan-free build: **303 files already parse**, and the 139 that do not are exactly the Vulkan coupling VITA-12 has to remove
+(`auth`, `network`, `pipeline`, `audio` are clean; the rest of `core`, `game`, `addons` and `ui` are not). The "with" column only says the *other* code in those files is fine.
 
 Read this with two caveats. First, it is syntax only: it says nothing about linking or behaviour. Second,
-the 98 files that include Vulkan only get this far because of `-DVK_USE_64_BIT_PTR_DEFINES=1`. On a 32-bit
+the files that include Vulkan only get this far in the "with" column because of `-DVK_USE_64_BIT_PTR_DEFINES=1`. On a 32-bit
 target Vulkan turns every non-dispatchable handle (`VkPipeline`, `VkPipelineLayout`, ...) into a plain
-`uint64_t`, so `rendering/vk_utils.hpp:41,47` (`destroy(VkDevice, VkPipeline&)` and
+`uint64_t`, so (in 98 files) `rendering/vk_utils.hpp:41,47` (`destroy(VkDevice, VkPipeline&)` and
 `destroy(VkDevice, VkPipelineLayout&)`) become the same overload and **do not compile**. That is one more reason
 the Vulkan renderer must be excluded from the Vita build rather than shared (VITA-11/12), not merely
 "not used".
@@ -101,7 +106,7 @@ Verdicts: **keep** (use as is), **package** (VitaSDK provides it), **vendored** 
 | **Lua 5.1** | addon API, FrameXML | only **LuaJIT** (`libluajit-5.1.a`) | **vendored** | WoWee builds `extern/lua-5.1.5` as plain C with no `LUA_USE_*` defines. Ran a script and string formatting on Vita: `lua_Number` is 8 bytes (`double`), `ptrdiff_t` 4 `[v3k]`. LuaJIT is not an option (needs JIT; Lua 5.1 compatibility is intentional, `extern/VERSIONS.md`) |
 | **nlohmann/json** | config, manifests | none | **vendored** | `extern/nlohmann`, header-only; parses `[sweep]` |
 | **stb_image / stb_image_write** | textures, screenshots | only `stb_rect_pack`, `stb_textedit`, `stb_truetype` | **vendored** | header-only; parses `[sweep]` |
-| **Dear ImGui** | all debug and many game panels | `libimgui` **1.61 WIP** (+ `imgui_impl_vitagl.h`) | **vendored** | WoWee vendors **1.92.6 WIP** (submodule). The SDK copy dates from 2018 and the API differs (`GetBackgroundDrawList`, `SetItemTooltip`, `AddKeyEvent` ... are missing). Keep WoWee's, write a small vitaGL backend (the stock OpenGL ES2 backend is the starting point). Note `ImGui::Text("%zu")` hits the printf gap G3; defining `IMGUI_USE_STB_SPRINTF` for the Vita build avoids it |
+| **Dear ImGui** | all debug and many game panels | `libimgui` **1.61 WIP** (+ `imgui_impl_vitagl.h`) | **vendored** | WoWee vendors **1.92.6 WIP** (submodule). The SDK copy dates from 2018 and the API differs (`GetBackgroundDrawList`, `SetItemTooltip`, `AddKeyEvent` ... are missing). Keep WoWee's, write a small vitaGL backend (the stock OpenGL ES2 backend is the starting point). Note `ImGui::Text("%zu")` hits the printf gap G3. ImGui can route formatting through `stb_sprintf.h` (`IMGUI_USE_STB_SPRINTF`), but that header is in neither ImGui nor the SDK, so it would have to be vendored; casting the two non-rendering sites is simpler |
 | **miniaudio** | `audio_engine.cpp` (all audio) | not present (SDK has OpenAL, SoLoud, SDL_mixer, libopus, vorbis, mpg123) | **port** | Compiles with its defaults `[sweep]`. It has no Vita backend; the engine uses `ma_engine_config.dataCallback` and `ma_backend`, which only exist when device I/O is on, so decoder-only (`MA_NO_DEVICE_IO`) does **not** build. Route: miniaudio's `MA_HAS_CUSTOM` backend feeding `sceAudioOut`. Decision in VITA-29 |
 | **FFmpeg** | cinematics (per `CMakeLists.txt:417`) and `screen_recorder` | `libav*`, `libsw*` | **drop** | Optional already: CMake sets `HAVE_FFMPEG` only if found, and Android builds without it (`CMakeLists.txt:412-419`). In `src/`, only `core/screen_recorder.cpp` references libav directly. The libs exist if cinematics are ever wanted |
 | **Vulkan, vk-bootstrap, VMA** | the renderer | none | **drop** on Vita | Replaced by vitaGL (VITA-11). See the 32-bit note in section 2 |
@@ -146,7 +151,7 @@ arm in those two functions (`#elif defined(__vita__)` returning failure) rather 
 |---|---|---|---|---|
 | **G1** | `std::thread` throws `Enable multithreading to use std::thread: Not owner`. GCC 15's `__gthread_active_p()` tests a *weak* reference to `pthread_cancel`. In a static link nothing pulls that `libpthread.a` member in, so the reference is 0. Raw `pthread_create` works; the link also needs `-lpthread` explicitly (undefined `pthread_*` otherwise) `[v3k]` | Every `std::thread` user in the game (thread pool, terrain workers, async pump) would throw on startup | Link `pthread` and force the symbol: `-Wl,-u,pthread_cancel` (`tools/vita/depcheck/CMakeLists.txt`). Verified: all thread tests pass with it | **VITA-4** (build), needs the same lines |
 | **G2** | `std::filesystem` does not understand `ux0:` paths: `is_absolute("ux0:data/x")` is false, `absolute()` and `weakly_canonical()` return `app0:/ux0:data/x`. Also `fs::space()` reports 4294967295 MB, and **`fs::remove_all()` never returns** on a non-empty tree (spins on `sceIoRemove`, "Directory not empty") `[v3k]`. Create, rename, iterate, `file_size`, `relative`, `remove` and `current_path("ux0:...")` followed by a relative open all work | Eight call sites resolve paths: `ui/auth_screen.cpp:1008,1093`, `core/window.cpp:35`, `core/config_paths.cpp:26-29`, `addons/addon_manager.cpp:145-146`, `game/opcode_table.cpp:106`, `game/zone_manager.cpp:23`. None calls `remove_all` or `space` `[grep]`. 163 files use `std::filesystem`, so it has to be right | A Vita path helper (resolve against a known `ux0:` data root, never call `absolute`/`canonical` on a device path); a ban on `remove_all`. Re-check the three emulator-only oddities on hardware | **new item VITA-35**; related VITA-6 (paths) |
-| **G3** | newlib printf on Vita ignores the `z`, `t` and `j` length modifiers: `%zu` prints the letters `zu` and consumes no argument. `%lld`, `%llu`, `%llx`, `%lu`, `PRIu64`, `%.2f`, `%g` are correct `[v3k]` | Silent wrong text, and with `%zu` followed by another argument the later ones shift. Seven sites `[grep]`: `ui/game_screen.cpp:1263`, `ui/combat_ui.cpp:776` and five in `rendering/performance_hud.cpp`. Two outside `rendering/` | Cast to `unsigned long` at the two non-rendering sites (an `upstream-candidate` 32-bit fix, VITA-5); `-DIMGUI_USE_STB_SPRINTF` covers ImGui's own formatting | **VITA-5** |
+| **G3** | newlib printf on Vita ignores the `z`, `t` and `j` length modifiers: `%zu` prints the letters `zu` and **does not consume its argument**, so every later argument shifts (`snprintf("%d|%zu|%d", 1, 2, 3)` gave `1|zu|2`). `%lld`, `%llu`, `%llx`, `%lu`, `PRIu64`, `%.2f`, `%g` are correct `[v3k]` | Wrong text, and the shifted arguments make a later `%s` read a number as a pointer: a crash, not just a typo. Seven sites `[grep]`: `ui/game_screen.cpp:1263`, `ui/combat_ui.cpp:776` and five in `rendering/performance_hud.cpp`. Two outside `rendering/` | Cast to `unsigned long` at the two non-rendering sites (an `upstream-candidate` 32-bit fix, VITA-5); ImGui's own `Text` calls are the two cases; a vendored `stb_sprintf.h` would be the global fix | **VITA-5** |
 | **G4** | `<sys/sysinfo.h>` is missing, so `core/memory_monitor.cpp` does not compile; the 4, 8, 12 and 16 GiB `size_t` constants overflow (section 2; `memory_monitor.cpp:135` is the 16 GiB one) | Memory sizing is wrong or does not build | Vita arm in the `memory_monitor.cpp` platform ladder reading the real budget (VITA-23); widen the constants in section 2 | **VITA-5**, **VITA-23** |
 | **G5** | Vulkan 32-bit handle typedefs make `vk_utils.hpp` overloads collide (section 2) | Only matters if Vulkan code were shared | Keep Vulkan files out of the Vita build | **VITA-11/12** |
 
@@ -161,9 +166,9 @@ Not a gap, but worth knowing for VITA-7 (networking): BSD sockets work through n
 
 `tools/vita/depcheck/` is a small C++20 app (`main.cpp`) plus the vendored Lua, linked against OpenSSL, zlib, glm, pthread and the sceNet
 stubs. It logs `PASS`/`FAIL`/`INFO` lines to `ux0:data/wowee/depcheck.log` and exits on its own. **A `FAIL` line is a finding, not a probe
-bug**: the four `FAIL`s in the last run are exactly G3.
+bug**: the four `FAIL`s in the last run are exactly G3 (`%zu`, `%zd`, `%td`, `%jd`).
 
-Last run on Vita3K v0.2.1 (emulator): **47 PASS, 4 FAIL** (all `%z*`/`%j*` printf, G3), then the deliberate `fs::remove_all` test, which hangs (G2).
+Last run on Vita3K v0.2.1 (emulator): **48 PASS, 4 FAIL** (all `%z*`/`%j*` printf, G3), then the deliberate `fs::remove_all` test, which hangs (G2).
 The 33 PASS lines of the first complete run covered the C++20 and library checks; the later runs added sockets, `current_path` and printf.
 
 Reproduce:

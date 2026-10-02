@@ -163,6 +163,8 @@ static void printf_formats() {
         {"%zu", "123456", [](char* o, size_t n) { snprintf(o, n, "%zu", static_cast<size_t>(123456)); }},
         {"%zd", "-5", [](char* o, size_t n) { snprintf(o, n, "%zd", static_cast<ssize_t>(-5)); }},
         {"%td", "7", [](char* o, size_t n) { snprintf(o, n, "%td", static_cast<ptrdiff_t>(7)); }},
+        // does a dropped %z swallow its argument? (matters: a shifted argument before %s is a crash)
+        {"%d|%zu|%d (args 1,2,3)", "1|zu|2", [](char* o, size_t n) { snprintf(o, n, "%d|%zu|%d", 1, static_cast<size_t>(2), 3); }},
         {"%lld", "-5000000000", [](char* o, size_t n) { snprintf(o, n, "%lld", -5000000000LL); }},
         {"%llu", "5000000000", [](char* o, size_t n) { snprintf(o, n, "%llu", 5000000000ULL); }},
         {"%llx", "12ab34cd56", [](char* o, size_t n) { snprintf(o, n, "%llx", 0x12ab34cd56ULL); }},
