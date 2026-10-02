@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace wowee {
+namespace pipeline { class AssetManager; }
 namespace rendering {
 
 // ============================================================================
@@ -31,6 +32,11 @@ struct EmoteInfo {
 class EmoteRegistry {
 public:
     static EmoteRegistry& instance();
+
+    /// The asset manager the DBCs are read from. Set by Application once it exists and
+    /// cleared before it goes; must be set before the first loadFromDbc(), which without
+    /// one falls back to the built-in table.
+    void setAssetManager(pipeline::AssetManager* assets) { assets_ = assets; }
 
     /// Load emotes from DBC files (called once on first use).
     void loadFromDbc();
@@ -65,6 +71,7 @@ public:
 
 private:
     EmoteRegistry() = default;
+    pipeline::AssetManager* assets_ = nullptr;
     EmoteRegistry(const EmoteRegistry&) = delete;
     EmoteRegistry& operator=(const EmoteRegistry&) = delete;
 

@@ -26,9 +26,9 @@ interfaces, not hunting hidden singletons. Only two `Application::getInstance()`
 | `getCameraController()->setIntoxication`, `getPostProcessPipeline()->setIntoxication` | `game_handler_callbacks.cpp:617`, `game_handler_packets.cpp:508` | a | `IScreenEffects::setIntoxication` |
 | `setCharacterYaw`, camera facing | `game_handler_callbacks.cpp:1656-1675` | a | player-pose interface (set facing) |
 | `WMORenderer` / `M2Renderer` instance calls (`setInstanceTransform`, `setInstanceHidden`, `setInstanceDoodadAnimation`, `getInstanceFloorHeight`, `getInstanceWorldBounds`, `instanceHasCollisionGeometry`, `setInstanceIsTransport`) | `transport_manager.cpp` (about 21 sites; holds `wmoRenderer_`, `m2Renderer_`) | a | `ITransportRenderTarget`; the largest single seam |
-| `rendering::movement::kMaxStepUp` | `transport_manager.cpp:546-549` (`rendering/movement_limits.hpp`) | b | move constants to a neutral header (check the file is Vulkan-free first) |
-| `AnimationController::getEmoteAnimByEmotesId`, `isStateEmoteById`, `getEmoteTextByDbcId` (static) | `chat_handler.cpp:216-221,1014`, `entity_controller.cpp:1261` | b | static helpers; split the pure part out of `rendering/animation_controller.hpp`, not verified that it is pure |
-| `rendering::anim::validateAgainstDBC`, `animation/animation_ids.hpp` | `game_handler_callbacks.cpp:3592`, `game_handler.cpp`, `game_handler_packets.cpp` | b | enum/validator to a neutral header |
+| `rendering::movement::kMaxStepUp` | `transport_manager.cpp:546-549` (`rendering/movement_limits.hpp`) | b | none needed: header is `<cmath>` + glm only (checked 2026-10-03); `wowee_core` just uses it where it is |
+| `AnimationController::getEmoteAnimByEmotesId`, `isStateEmoteById`, `getEmoteTextByDbcId` (static) | `chat_handler.cpp:216-221,1014`, `entity_controller.cpp:1261` | b | **not pure**: they wrap `EmoteRegistry`, whose `.cpp` reached `Application` for the asset manager. Fixed in VITA-44: asset manager injected, `game/` calls `EmoteRegistry` directly (the statics are defined in `animation_controller.cpp`, which pulls in the renderer, so keeping the calls would be a link error, not just an include problem) |
+| `rendering::anim::validateAgainstDBC`, `animation/animation_ids.hpp` | `game_handler_callbacks.cpp:3592`, `game_handler.cpp`, `game_handler_packets.cpp` | b | none needed: header std-only, `.cpp` needs only `dbc_loader` and the logger; goes into `wowee_core` where it is (VITA-47) |
 | `#include "rendering/renderer.hpp"` only | `combat_handler`, `social_handler`, `quest_handler`, `inventory_handler`, `chat_handler`, `game_handler.cpp` | none | include likely unused after the above; remove, no seam |
 
 ## `game/` -> `audio/`
@@ -52,7 +52,7 @@ suspect; not checked).
 (`combat_handler.cpp:1394`), `ui::frameXmlNoteWorldEntry()` (`game_handler_callbacks.cpp:938`) and
 the enum `ui::UiElement`. Class **a**/**b**: the header is already Vulkan-free; headless needs
 the four functions to exist. Cheapest seam: provide them from a small `wowee_core` source (always
-`false`/no-op) and leave the real ones in `ui/`. Not verified: where they are defined today.
+`false`/no-op) and leave the real ones in `ui/`. Checked 2026-10-03: defined in `src/ui/framexml_takeover.cpp`, which needs only the logger (atomic flags), so no stub: the file joins `wowee_core` as it is (VITA-47).
 
 ## `game/` -> `core/application`
 
@@ -109,7 +109,7 @@ only parses; `check32.sh` ran them on glibc).
 1. **Renderer seams** (class a, spell visuals, player pose, screen effects, transport). One PR per
    interface; `GameServices` holds interface pointers; `Renderer` implements them. Desktop unchanged.
 2. **Neutral data/helpers** (class b): `movement_limits`, `animation_ids`, emote helpers, the four
-   `frameXml*` stubs. Moves only, no logic change, separate PRs.
+   `frameXml*` functions. Became VITA-44: only the emote helpers needed work (below).
 3. **`Application` removal from `game/`** (class c): `game_utils.hpp`, `warden_handler.cpp`, plus the
    unused includes. Smallest, and the best first PR.
 4. **Audio null seam** (decision between null coordinator and interface).
@@ -126,3 +126,14 @@ only parses; `check32.sh` ran them on glibc).
   Lua logic. Handle it in VITA-49 after VITA-12 (Vulkan-free UI); re-run this audit for `addons/`
   first. Do not pull addons into VITA-47.
 - Not decided: option names, and whether upstream is approached (the user has not agreed, see VITA-33).
+
+## Correction (2026-10-03, while doing VITA-44)
+
+The first audit was a first-level grep over includes and call sites. It judged several helpers
+"pure data in the wrong directory" and proposed moving them. Reading the definitions showed
+otherwise: `movement_limits`, `animation_ids` and `framexml_takeover` are already clean and need no
+move (a carve works on source files, not directories), while the emote helpers had a **transitive**
+`Application` dependency (`emote_registry.cpp`) that the first-level grep could not see. Lessons:
+audit definitions, not only headers; and check **link** dependencies too: a clean header is no use if
+the symbol is defined in a `.cpp` that pulls in the renderer. VITA-47 must verify symbols (for
+example by linking `wowee_core` into a test executable), not only includes.

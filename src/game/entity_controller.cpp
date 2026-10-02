@@ -13,7 +13,7 @@
 #include "core/logger.hpp"
 #include "core/coordinates.hpp"
 #include "network/world_socket.hpp"
-#include "rendering/animation_controller.hpp"
+#include "rendering/animation/emote_registry.hpp"
 #include <algorithm>
 #include <bit>
 #include <set>
@@ -1258,7 +1258,9 @@ EntityController::UnitFieldUpdateResult EntityController::applyUnitFieldsOnUpdat
             unit->setNpcEmoteState(val);
             // Fire emote animation callback so entity_spawner can update the NPC's idle anim
             if (val != oldEmote && owner_.emoteAnimCallbackRef()) {
-                uint32_t animId = val != 0 ? rendering::AnimationController::getEmoteAnimByEmotesId(val) : 0;
+                auto& emotes = rendering::EmoteRegistry::instance();
+                emotes.loadFromDbc();
+                uint32_t animId = val != 0 ? emotes.animByEmotesId(val) : 0;
                 if (val == 0 || animId != 0) {
                     // UNIT_NPC_EMOTESTATE is persistent by definition - a zero
                     // here genuinely clears the state loop.

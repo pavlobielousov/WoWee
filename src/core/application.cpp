@@ -17,6 +17,7 @@
 #include "game/spell_classification.hpp"
 #include "rendering/animation/animation_ids.hpp"
 #include "rendering/animation_controller.hpp"
+#include "rendering/animation/emote_registry.hpp"
 #include <bit>
 #include <unordered_set>
 #include <cmath>
@@ -249,6 +250,7 @@ Application::Application() {
 Application::~Application() {
     shutdown();
     game::setActiveExpansionRegistry(nullptr);
+    rendering::EmoteRegistry::instance().setAssetManager(nullptr);
     instance = nullptr;
 }
 
@@ -362,6 +364,7 @@ bool Application::initialize() {
     gameServices_.renderer = renderer.get();
     gameServices_.audioCoordinator = audioCoordinator_.get();
     gameServices_.assetManager = assetManager.get();
+    rendering::EmoteRegistry::instance().setAssetManager(assetManager.get());
     gameServices_.expansionRegistry = expansionRegistry_.get();
 
     // Create game handler with explicit service dependencies
