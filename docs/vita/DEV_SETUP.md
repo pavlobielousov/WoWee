@@ -185,3 +185,25 @@ no server has been brought up for this project yet.)*
 - [ ] *(deferred)* TRIANGLE crash on hardware produces a `.psp2dmp`; `parse_core.sh` symbolizes it against
       `build-vita/devcheck/devcheck` and shows `main` / `main.c` at the faulting line.
 - [ ] *(deferred)* Local AzerothCore reachable from the Vita's network (the emulator can reach it too).
+
+## 9. Desktop build check (VITA-36) *(verified)*
+
+Run this before a PR that changes shared C++ logic (VITA-5, VITA-12; not needed for small gated edits). It builds
+and tests the Linux desktop client in a container, so nothing is installed on the host.
+
+```sh
+tools/vita/desktop_build.sh all        # image if missing, configure, build, ctest (output in build-desktop/)
+tools/vita/desktop_build.sh build      # incremental rebuild; also: image, configure, test, shell
+```
+
+- Image `wowee-desktop-builder` is built from `tools/vita/desktop-builder.Dockerfile`, a copy of upstream's
+  `container/builder-linux.Dockerfile` plus `ca-certificates` (upstream's file fails to clone SDL3 under
+  `--no-install-recommends`: "server certificate verification failed"). Re-sync it by hand if upstream's changes.
+  Upstream's own `container/run-linux.sh` is Docker-only, copies the tree, clones the FSR SDKs and uses LTO, so it is not used.
+- Apple `container` VMs default to 1 GB and 4 CPUs; the script asks for `MEMORY=10G`, `CPUS=8`.
+- `extern/imgui` and `extern/vk-bootstrap` are initialised on the host by the script if empty.
+- Add `build-desktop/` to `.git/info/exclude` (the shared `.gitignore` is left alone).
+- **Baseline** (Apple Silicon, linux/arm64 container, Release, Ninja, 10 GB / 8 CPUs, `vita` at `247ee1ae`):
+  configure + full build + ctest took **340 s** after the image existed; **218 of 218 tests passed**. Any failure
+  that is not in this baseline is a regression.
+
