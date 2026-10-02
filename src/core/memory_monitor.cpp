@@ -1,5 +1,6 @@
 #include "core/memory_monitor.hpp"
 #include "core/logger.hpp"
+#include "core/size_utils.hpp"
 #include <fstream>
 #include <string>
 #include <sstream>
@@ -132,22 +133,23 @@ size_t MemoryMonitor::getAvailableRAM() const {
 size_t MemoryMonitor::getRecommendedCacheBudget() const {
     size_t available = getAvailableRAM();
     // Use 50% of available RAM for caches, hard-capped at 16 GB.
-    static constexpr size_t kHardCapBytes = 16ull * 1024 * 1024 * 1024;  // 16 GB
-    size_t budget = available * 50 / 100;
-    return budget < kHardCapBytes ? budget : kHardCapBytes;
+    // Arithmetic in 64 bits: `available * 50` overflows a 32-bit size_t above ~85 MB.
+    static constexpr uint64_t kHardCapBytes = 16ull * 1024 * 1024 * 1024;  // 16 GB
+    uint64_t budget = static_cast<uint64_t>(available) * 50 / 100;
+    return clampToSizeT(budget < kHardCapBytes ? budget : kHardCapBytes);
 }
 
 bool MemoryMonitor::isMemoryPressure() const {
     size_t available = getAvailableRAM();
     // Memory pressure if < 10% RAM available
-    return available < (totalRAM_ * 10 / 100);
+    return available < static_cast<size_t>(static_cast<uint64_t>(totalRAM_) * 10 / 100);
 }
 
 bool MemoryMonitor::isSevereMemoryPressure() const {
     size_t available = getAvailableRAM();
     // Severe pressure if < 15% RAM available - background workers should
     // pause entirely to avoid OOM-killing other applications.
-    return available < (totalRAM_ * 15 / 100);
+    return available < static_cast<size_t>(static_cast<uint64_t>(totalRAM_) * 15 / 100);
 }
 
 } // namespace core

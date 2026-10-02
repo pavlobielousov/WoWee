@@ -3,6 +3,7 @@
 #include "pipeline/dds_loader.hpp"
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
+#include "core/size_utils.hpp"
 #include "core/profiler.hpp"
 #include <algorithm>
 #include <cstdlib>
@@ -127,7 +128,7 @@ void AssetManager::setupFileCacheBudget() {
     // hold and a good way to be killed the moment it goes to the background.
     const size_t defaultMaxBudgetBytes = 384ull * 1024ull * 1024ull;
 #else
-    const size_t defaultMaxBudgetBytes = 12288ull * 1024ull * 1024ull;  // 12 GB max for file cache
+    const size_t defaultMaxBudgetBytes = core::clampToSizeT(12288ull * 1024ull * 1024ull);  // 12 GB max for file cache
 #endif
     const size_t maxBudgetBytes = (envMaxMB > 0)
         ? (envMaxMB * 1024ull * 1024ull)
