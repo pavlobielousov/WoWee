@@ -213,3 +213,50 @@ tools/vita/desktop_check.sh build      # incremental rebuild; also: image, confi
   configure + full build + ctest took **340 s** after the image existed; **218 of 218 tests passed**. Any failure
   that is not in this baseline is a regression.
 
+
+## 10. Running the unit tests on a 32-bit target (VITA-37) *(verified: armhf under qemu-user, Apple Silicon, container)*
+
+**Decision: cross-build the test targets for armhf (ARMv7, hard float, ILP32; the Vita's ABI) in the existing arm64 Linux
+container and run them with `qemu-arm` (qemu-user).** It works today, needs no host install, and found a real 32-bit bug
+on the first run. Follow-up implementation: VITA-38.
+
+Measured 2026-10-02 (Apple Silicon Mac, `container` VM with 10 GB / 8 CPUs; clean state):
+
+| Step | Result |
+|---|---|
+| Image `wowee-armhf` (`tools/vita/check32/Dockerfile`, on top of `wowee-desktop-builder`) | 44 s to build. gcc/g++ 13.3 cross compilers, `qemu-user`, armhf OpenSSL and zlib (ports.ubuntu.com via `dpkg --add-architecture armhf`), SDL3 built for armhf without a video backend. Image size not measured. |
+| Cross-configure of the whole tree (`-DWOWEE_BUILD_TESTS=ON`) | about 2 s |
+| Build of all 212 `test_*` targets | about 2 min (8 CPUs, cold) |
+| `ctest -j8` under `qemu-arm` (without `sweep_guard`) | 17 s wall; slowest `settings_apply_on_load` 16 s, `rt_bvh` 5 s |
+| Result | **213 of 217 pass**; the 4 failures are listed below |
+| Sanity | binaries are `ELF32 ARM`, `sizeof(size_t) == 4`; running one directly fails with "Exec format error", so the emulator is needed |
+
+What the 4 failures are:
+- `warden_reloc`: **a real 32-bit bug.** `wardenRelocTargetFits` (`include/game/warden_module.hpp:70`) computes `static_cast<size_t>(target) + 4u <= moduleSize`; with a 32-bit `size_t`, `target = 0xFFFFFFFF` wraps to 3 and passes the bounds check, so an attacker-supplied Warden relocation could write at `image + 0xFFFFFFFF`. The test already covers it; it only fails on a 32-bit build. Not fixed in this item (Warden is dropped on Vita, but the code is shared and affects any 32-bit build): tracked as VITA-39.
+- `extract_progress`: needs StormLib, which the image does not have for armhf (and the Vita does not need it).
+- `framexml_compiles`, `addon_xml_compiles`: not a 32-bit result. Their helper `framexml_compile_check` is not a `test_*` target, so the spike never built it, and they need `Data/interface`, which is absent (skipped, exit 77, on a desktop with data).
+- `sweep_guard` was excluded: it runs host Python sweeps, is not 32-bit relevant and exceeds a 120 s timeout there.
+
+Reproduce (from the WoWee root; `desktop_check.sh image` first if `wowee-desktop-builder` is missing):
+
+```sh
+container build -f tools/vita/check32/Dockerfile -t wowee-armhf tools/vita/check32
+container run --rm -i --memory 10G --cpus 8 --entrypoint /bin/bash -v "$PWD:/workspace" wowee-armhf -s < tools/vita/check32/run_spike.sh
+```
+
+Pitfalls found (all are encoded in the files above):
+- CMake silently picks the **arm64** `libssl`, `libz` and `libvulkan` from `/usr/lib/aarch64-linux-gnu` unless their armhf paths are given explicitly; the link then fails with "file format not recognized". The root CMake also makes the 23 packet tests link `Vulkan::Vulkan`, so an empty armhf `libvulkan.so` stub is used (no Vulkan code is compiled or run in those tests).
+- The configure fails on SDL3 until an armhf SDL3 exists. SDL refuses to configure with no video backend unless `-DSDL_UNIX_CONSOLE_BUILD=ON`.
+- With `dpkg --add-architecture armhf` the arm64 apt sources must be pinned to `Architectures: arm64`, otherwise `apt-get update` looks for armhf on the wrong mirror.
+
+What this does **not** cover:
+- Only GPU-free tests run; Vulkan code cannot be compiled for 32-bit (see VITA-3), so rendering is untested. 212 of the 218 desktop tests are `test_*` targets and almost all of them link only Catch2 plus a handful of sources, so the covered set is large.
+- Linux armhf glibc is not newlib: newlib-only traps (`%zu`, `std::filesystem` on `ux0:`) do not show up here. Those remain Vita3K and compile-only territory.
+- qemu-user does not model the Vita's memory limit, CPU speed or threading limits.
+- Measured on Apple Silicon only; Apple CPUs have no AArch32 mode, which is why emulation is needed at all.
+
+**Compile-only widening (`-Wconversion`)**, `WARN_FLAGS=-Wconversion OUT=build-vita/sweep-conv tools/vita/depcheck/sweep.sh auth network core game pipeline addons audio` (57 s, VitaSDK GCC 15.2; the sweep now accepts `WARN_FLAGS` and `OUT`): 253 unique warnings, of which only about 17 are 64-bit to 32-bit truncations. The rest is width-independent noise (`int` to `float` 120+ incl. miniaudio, `int` to `uint8_t`/`uint16_t` about 90). Do not enable it as a gate. The 64-to-32 sites, for triage in VITA-38: `spline_packet.cpp:195,333` (`uint64_t` to `size_t`), `audio_engine.cpp:142,152` (`ma_uint64` to `size_t`), `packet_parsers_classic.cpp:1295` (`uint64_t` to `uint32_t`, 3 sites), `music_manager.cpp:140` (`streamoff` to `streamsize`, 10 sites), `vanilla_crypt.cpp:17`, `auth_packets.cpp:66`. A grep over the log for those patterns is a cheap filter if the check is wanted.
+
+**Not tried:** i386 (`-m32`) and the Rosetta question. Step 3 succeeded, so the plan said to skip it; the claim that Rosetta for Linux cannot run 32-bit x86 remains unverified. armhf is also the closer match to the Vita (same ILP32, alignment and hard-float ABI), so i386 would only be a fallback.
+
+**Fallbacks if armhf ever becomes impractical** (not needed now): run chosen tests as a Vita app on Vita3K like `tools/vita/depcheck/`, which tests newlib but gives pass/fail only through the log; or rely on the compile-only sweep. That would lose real execution of the 200+ Catch2 tests.

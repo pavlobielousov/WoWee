@@ -6,11 +6,12 @@
 # Run from anywhere:
 #   tools/vita/depcheck/sweep.sh [dir ...]          # default: every src/ subdirectory
 #   JOBS=8 tools/vita/depcheck/sweep.sh network
+#   WARN_FLAGS=-Wconversion OUT=build-vita/sweep-conv tools/vita/depcheck/sweep.sh auth network   # VITA-37: extra warnings, own output dir
 set -eu
 . "$(dirname "$0")/../lib.sh"
 VITA_ROOT=$(cd "$(dirname "$0")/../../.." && pwd)   # lib.sh assumes a script directly in tools/vita
 runtime=$(vita_runtime)
-export OUT=build-vita/sweep
+export OUT="${OUT:-build-vita/sweep}"
 mkdir -p "$VITA_ROOT/$OUT"
 DIRS="${*:-addons audio auth core game math network pipeline rendering ui}"
 
@@ -19,7 +20,7 @@ DIRS="${*:-addons audio auth core game math network pipeline rendering ui}"
 limits=""
 [ "$runtime" = container ] && limits="--memory ${MEMORY:-10G} --cpus ${CPUS:-8}"
 
-exec "$runtime" run --rm $limits -v "$VITA_ROOT:/workspace" -e JOBS="${JOBS:-7}" -e DIRS="$DIRS" -e OUT="$OUT" \
+exec "$runtime" run --rm $limits -v "$VITA_ROOT:/workspace" -e JOBS="${JOBS:-7}" -e DIRS="$DIRS" -e OUT="$OUT" -e WARN_FLAGS="${WARN_FLAGS:-}" \
     "$VITASDK_IMAGE" sh -c '
 cd /workspace
 rm -rf "$OUT/logs"; mkdir -p "$OUT/logs"
@@ -35,7 +36,7 @@ for d in $DIRS; do find "src/$d" -name "*.cpp" | sort >> "$OUT/files.txt"; done
 cat > "$OUT/one.sh" <<EOS
 #!/bin/sh
 f=\$1; log="$OUT/logs/\$(echo "\$f" | tr / _).log"
-if arm-vita-eabi-g++ -std=gnu++20 -fsyntax-only -Wall -Wextra -Wno-missing-field-initializers \
+if arm-vita-eabi-g++ -std=gnu++20 -fsyntax-only -Wall -Wextra -Wno-missing-field-initializers \$WARN_FLAGS \
     -DGLM_ENABLE_EXPERIMENTAL -DGLM_FORCE_DEPTH_ZERO_TO_ONE \
     -DVK_USE_64_BIT_PTR_DEFINES=1 -DWOWEE_HAS_AMD_FSR2=0 -DWOWEE_HAS_AMD_FSR3_FRAMEGEN=0 -DWOWEE_AMD_FFX_SDK_KITS=0 \
     -Iinclude -Isrc -I$OUT/gen -isystem extern -isystem extern/imgui -isystem extern/imgui/backends -isystem extern/lua-5.1.5/src -isystem extern/vk-bootstrap/src \
