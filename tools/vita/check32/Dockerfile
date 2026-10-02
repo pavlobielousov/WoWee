@@ -1,10 +1,12 @@
-# VITA-37 spike: 32-bit ARM (armhf) cross-build + qemu-user test runner, on top of the desktop builder image
-# (tools/vita/desktop-builder.Dockerfile, built by `desktop_check.sh image`). Proof of concept, see DEV_SETUP.md section 10.
+# 32-bit ARM (armhf) cross-build + qemu-user test runner, on top of the desktop builder image
+# (tools/vita/desktop-builder.Dockerfile, built by `desktop_check.sh image`). Driven by tools/vita/check32.sh (VITA-37, VITA-38);
+# see DEV_SETUP.md section 10.
 # Build:  container build -f tools/vita/check32/Dockerfile -t wowee-armhf tools/vita/check32
 FROM wowee-desktop-builder
-# armhf comes from ports.ubuntu.com; the arm64 sources must be pinned to arm64 so apt does not look for armhf there.
+# armhf comes from ports.ubuntu.com on every host; the host's own sources (arm64: ports, amd64: archive.ubuntu.com) must be
+# pinned to the host architecture so apt does not look for armhf there. Written for both, verified on arm64 only.
 RUN dpkg --add-architecture armhf && \
-    sed -i 's/^Types: deb/Types: deb\nArchitectures: arm64/' /etc/apt/sources.list.d/ubuntu.sources && \
+    sed -i "s/^Types: deb/Types: deb\\nArchitectures: $(dpkg --print-architecture)/" /etc/apt/sources.list.d/ubuntu.sources && \
     printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: noble noble-updates noble-security\nComponents: main universe\nArchitectures: armhf\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' > /etc/apt/sources.list.d/armhf.sources && \
     apt-get update && \
     apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user \
