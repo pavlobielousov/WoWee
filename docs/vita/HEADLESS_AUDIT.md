@@ -117,5 +117,12 @@ only parses; `check32.sh` ran them on glibc).
    CMake function for the Vita link options.**
 6. **`wowee_headless` driver** (`tools/headless/`), desktop CI build, Vita build for VITA-10.
 
-Not decided here: option names, whether upstream is approached (the user has not agreed, see
-VITA-33).
+## Decisions and where the work went (2026-10-02)
+
+- VITA-9 is the analysis only. The six steps above are items VITA-43 (Application removal),
+  VITA-44 (neutral data), VITA-45 (renderer seams), VITA-46 (audio), VITA-47 (CMake carve) and
+  VITA-48 (`wowee_headless`).
+- **`wowee_core` v1 excludes `src/addons/`** (user, 2026-10-02): the coupling is the UI tree, not
+  Lua logic. Handle it in VITA-49 after VITA-12 (Vulkan-free UI); re-run this audit for `addons/`
+  first. Do not pull addons into VITA-47.
+- Not decided: option names, and whether upstream is approached (the user has not agreed, see VITA-33).
