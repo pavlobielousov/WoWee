@@ -28,7 +28,6 @@
 #include "game/screen_effects.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/post_process_pipeline.hpp"
-#include "rendering/spell_visual_system.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/player_voice_manager.hpp"

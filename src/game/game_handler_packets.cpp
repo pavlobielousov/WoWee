@@ -26,7 +26,7 @@
 #include "game/screen_effects.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/post_process_pipeline.hpp"
-#include "rendering/spell_visual_system.hpp"
+#include "game/spell_visuals.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"
@@ -2412,9 +2412,9 @@ void GameHandler::registerRemainingOpcodes() {
         uint64_t impTargetGuid = packet.readUInt64();
         uint32_t impVisualId   = packet.readUInt32();
         if (impVisualId == 0) return;
-        auto* renderer = services_.renderer;
+        auto* svs = services_.spellVisuals;
         auto* pose = services_.playerPose;
-        if (!renderer || !pose) return;
+        if (!svs || !pose) return;
         glm::vec3 spawnPos;
         if (impTargetGuid == playerGuid) {
             spawnPos = pose->position();
@@ -2424,7 +2424,7 @@ void GameHandler::registerRemainingOpcodes() {
             glm::vec3 canonical(entity->getLatestX(), entity->getLatestY(), entity->getLatestZ());
             spawnPos = core::coords::canonicalToRender(canonical);
         }
-        if (auto* sv = renderer->getSpellVisualSystem()) sv->playSpellVisual(impVisualId, spawnPos, /*useImpactKit=*/true);
+        svs->playSpellVisual(impVisualId, spawnPos, /*useImpactKit=*/true);
     };
     // SMSG_READ_ITEM_OK - moved to InventoryHandler::registerOpcodes
     // SMSG_READ_ITEM_FAILED - moved to InventoryHandler::registerOpcodes
