@@ -323,9 +323,15 @@ VITA-12), and returns normally, so the log is flushed by the static destructors.
 `std::thread`) the first function-local static with a non-trivial initialiser crashed in `__cxa_guard_acquire` (`pthread_mutex_lock` reads
 address 0), and once past that `__cxa_guard_release` failed in `pthread_cond_broadcast` (`__concurrence_lock_error` / `_broadcast_error` in the
 emulator log). Without the option the guards work but `std::thread` throws. WoWee is full of Meyers singletons (`Logger::getInstance` is the
-first), so a small lock-free `__cxa_guard_acquire/release/abort` (CAS on a per-guard owner word, `sceKernelDelayThread` while waiting) is linked
+first), so a small lock-free `__cxa_guard_acquire/release/abort` (one CAS on the guard word itself, `sceKernelDelayThread` while waiting) is linked
 into the executable and wins over libstdc++. Verified on Vita3K with 3 threads racing a slow initialiser: constructor ran once. **Any other Vita
 executable that uses function-local statics and `std::thread` needs the same file.** Not seen on hardware yet (VITA-34).
+**The guard is 32 bits on this target (VITA-42).** The compiler's guard variable on ARM EABI is 4 bytes (`_ZGV...` is `.size 4`, `sizeof(__cxxabiv1::__guard)` is 4),
+not the 8 of the generic Itanium ABI. The first version of `vita_cxa_guard.cpp` assumed 8 and kept the owner thread id in a second word, which was the
+*neighbouring variable*: it wrote a thread id into it, and waited forever if that word was non-zero. Which variable sat next to a guard depends on the
+section layout, so it showed up as the logger hanging when an executable was built without `-ffunction-sections`/`--gc-sections`. The state (initialised,
+busy, owner's low 16 thread-id bits) now lives in the one word, and a `static_assert` fails the build if the guard size ever differs. The threadcheck
+probe has a `guard_race` check (`guard_race.inits=1 values_ok=3`).
 
 Test (Vita3K): put an `env.txt` in `<pref-path>/ux0/data/wowee/` (for example `WOW_DATA_PATH=uma0:data/wowee/Data`, `WOWEE_LOG_UDP=127.0.0.1:9999`), then
 `tools/vita/vita3k_macos.sh build-vita/wowee.vpk WOWE00001 --seconds 12`; the app log shows the version line, heap and clocks, the env.txt keys and the
@@ -406,8 +412,8 @@ Vita3K does not schedule on real cores, so **only the API results are meaningful
 Still open on hardware: the priorities under real load (they are guesses) and the 30-minute session without unbounded thread creation. Both need the running client (VITA-9,
 VITA-10) and stay tasks on VITA-34. (`cpu_now` in the probe is the affinity mask read back, not the core in use; the placement rows above are what show where threads run. A busy thread at priority 159 starves a main thread at 160 on the same core: the placement test raises main's priority first, a hang found on the first hardware run.) The deliberate-crash run leaves a `psp2core-*.psp2dmp` in `ux0:data/`; delete it when done.
 
-**A trap (cause unknown, VITA-42):** an executable that links `core/logger.cpp` and the platform layer but is built **without**
-`-ffunction-sections -fdata-sections` and `-Wl,--gc-sections` stops at its first `LOG_*` call, right after the "writing the log to ..." line (no
-crash message in the emulator log, nothing after it). Bisected on Vita3K with the threadcheck probe (`-DTHREADCHECK_SECTIONS=` drops the flags,
-`-DTHREADCHECK_OPT=-O1` changes the optimisation): it hangs with the flags dropped at `-O1` and `-O2`, with or without `setLogLevel`, and never with
-them. `cmake/vita/Vita.cmake` has them, so the real `wowee.vpk` is fine; **copy them into any new Vita executable** that uses the logger.
+**Resolved (VITA-42): the logger hang without `-ffunction-sections -fdata-sections -Wl,--gc-sections` was the guard bug above, not the flags.** An executable built
+without them stopped at its first `LOG_*` call (right after "writing the log to ..."); gdb (`gdb_at_pc.sh` with a breakpoint on `sceKernelDelayThread`)
+showed it waiting in `__cxa_guard_acquire` for the `static const std::string home` guard in `Logger::emitLineLocked`. With the 32-bit guard the threadcheck
+probe logs with the flags dropped (`-DTHREADCHECK_SECTIONS=`) as well. `Vita.cmake` keeps the flags for size; they are no longer needed for correctness. Still needed
+for correctness: `-Wl,-u,sceUserMainThreadStackSize` (else `--gc-sections` drops the stack-size symbol). The hang is Vita3K only so far; hardware check is on VITA-34.

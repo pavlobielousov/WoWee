@@ -10,9 +10,18 @@
 // replaced here with a small lock-free implementation. Linked into the executable, it wins over
 // the libstdc++.a member, which then is never pulled in.
 //
-// Guard layout (Itanium C++ ABI, 8 bytes): byte 0 is "initialised" (the compiler tests it inline
-// before calling in); the second 32-bit word is ours: the id of the thread that is initialising
-// right now, or 0.
+// Guard layout. On ARM EABI the compiler's guard variable is **32 bits** (`_ZGV...` is `.size 4`;
+// the static_assert below checks it), not the 64 bits of the generic Itanium ABI. Byte 0 is "initialised"
+// (the compiler tests it inline before calling in), so the whole state has to fit in this one word:
+//   bit 0       initialised
+//   bit 8       an initialiser is running
+//   bits 16-31  low 16 bits of the id of the thread running it (to tell a recursive initialiser, which
+//               libstdc++ reports by throwing, from another thread, which waits)
+// Two threads whose ids share the low 16 bits would be taken for one thread: the second then aborts
+// instead of waiting. Thread ids on the Vita are sequential uids, so that needs 65536 threads.
+// (VITA-42: an earlier version kept the owner in a second word. That word was the *neighbouring
+// variable*: the guard wrote a thread id into it, and spun forever if it was non-zero, which showed
+// up only when the section layout changed.)
 #include <psp2/kernel/threadmgr.h>
 
 #include <atomic>
@@ -20,45 +29,42 @@
 #include <cstdint>
 #include <cstdlib>
 
+static_assert(sizeof(__cxxabiv1::__guard) == 4, "ARM EABI guard variables are 32 bits");
+
 namespace {
 
-struct Guard {
-    std::atomic<std::uint8_t> done;
-    std::uint8_t pad[3];
-    std::atomic<std::uint32_t> owner;
-};
-static_assert(sizeof(Guard) == 8, "Itanium ABI guard is 64 bits");
+constexpr std::uint32_t kDone = 1u;
+constexpr std::uint32_t kBusy = 1u << 8;
+
+inline std::atomic<std::uint32_t>& word(__cxxabiv1::__guard* guard) {
+    static_assert(sizeof(std::atomic<std::uint32_t>) == sizeof(__cxxabiv1::__guard));
+    return *reinterpret_cast<std::atomic<std::uint32_t>*>(guard);
+}
+
+inline std::uint32_t me() { return static_cast<std::uint32_t>(sceKernelGetThreadId()) & 0xFFFFu; }
 
 }  // namespace
 
 extern "C" int __cxa_guard_acquire(__cxxabiv1::__guard* guard) {
-    Guard* g = reinterpret_cast<Guard*>(guard);
-    if (g->done.load(std::memory_order_acquire)) return 0;
-    const std::uint32_t me = static_cast<std::uint32_t>(sceKernelGetThreadId());
+    auto& w = word(guard);
     for (;;) {
-        std::uint32_t expected = 0;
-        if (g->owner.compare_exchange_strong(expected, me, std::memory_order_acquire)) {
-            // Someone may have finished between the first check and the exchange.
-            if (g->done.load(std::memory_order_acquire)) {
-                g->owner.store(0, std::memory_order_release);
-                return 0;
-            }
-            return 1;  // this thread runs the initialiser
+        std::uint32_t v = w.load(std::memory_order_acquire);
+        if (v & kDone) return 0;
+        if (!(v & kBusy)) {
+            // v is 0 here: take it.
+            if (w.compare_exchange_strong(v, kBusy | (me() << 16), std::memory_order_acquire)) return 1;
+            continue;  // lost the race: look again
         }
-        if (expected == me) std::abort();  // the initialiser needs its own static: libstdc++ throws here
-        if (g->done.load(std::memory_order_acquire)) return 0;
-        sceKernelDelayThread(200);  // another thread is initialising: wait (microseconds)
+        if ((v >> 16) == me()) std::abort();  // the initialiser needs its own static: libstdc++ throws here
+        sceKernelDelayThread(200);            // another thread is initialising: wait (microseconds)
     }
 }
 
 extern "C" void __cxa_guard_release(__cxxabiv1::__guard* guard) {
-    Guard* g = reinterpret_cast<Guard*>(guard);
-    g->done.store(1, std::memory_order_release);
-    g->owner.store(0, std::memory_order_release);
+    word(guard).store(kDone, std::memory_order_release);
 }
 
 // The initialiser threw: let the next caller try again.
 extern "C" void __cxa_guard_abort(__cxxabiv1::__guard* guard) {
-    Guard* g = reinterpret_cast<Guard*>(guard);
-    g->owner.store(0, std::memory_order_release);
+    word(guard).store(0, std::memory_order_release);
 }
