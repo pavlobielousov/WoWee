@@ -980,6 +980,7 @@ set(WOWEE_SOURCES
     src/rendering/charge_effect.cpp
     src/rendering/spell_visual_system.cpp
     src/rendering/post_process_pipeline.cpp
+    src/rendering/renderer_screen_effects.cpp
     src/rendering/overlay_system.cpp
     src/rendering/animation_controller.cpp
     src/rendering/animation/animation_ids.cpp

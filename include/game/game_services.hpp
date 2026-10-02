@@ -5,7 +5,7 @@ namespace wowee {
 namespace rendering { class Renderer; }
 namespace pipeline { class AssetManager; }
 namespace audio { class AudioCoordinator; }
-namespace game { class ExpansionRegistry; }
+namespace game { class ExpansionRegistry; class IScreenEffects; }
 
 namespace game {
 
@@ -15,6 +15,8 @@ namespace game {
 struct GameServices {
     rendering::Renderer* renderer = nullptr;
     audio::AudioCoordinator* audioCoordinator = nullptr;
+    // Null when there is no renderer (the headless core): the calls are skipped.
+    IScreenEffects* screenEffects = nullptr;
     pipeline::AssetManager* assetManager = nullptr;
     ExpansionRegistry* expansionRegistry = nullptr;
     uint32_t gryphonDisplayId = 0;

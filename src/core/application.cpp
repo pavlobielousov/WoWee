@@ -28,6 +28,7 @@
 #include "core/thread_budget.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
+#include "rendering/renderer_screen_effects.hpp"
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/vk_context.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -362,6 +363,8 @@ bool Application::initialize() {
 
     // Populate game services - all subsystems now available
     gameServices_.renderer = renderer.get();
+    screenEffects_ = std::make_unique<rendering::RendererScreenEffects>(*renderer);
+    gameServices_.screenEffects = screenEffects_.get();
     gameServices_.audioCoordinator = audioCoordinator_.get();
     gameServices_.assetManager = assetManager.get();
     rendering::EmoteRegistry::instance().setAssetManager(assetManager.get());
@@ -2081,6 +2084,8 @@ void Application::shutdown() {
         renderer->shutdown();
     }
     LOG_DEBUG("Renderer shutdown complete, resetting...");
+    gameServices_.screenEffects = nullptr;
+    screenEffects_.reset();
     renderer.reset();
 
     // Shutdown audio coordinator after renderer (renderer may reference audio during shutdown)
