@@ -42,6 +42,8 @@ inline std::filesystem::path userDataRoot() {
         return fs::path(profile) / "AppData" / "Local" / "Wowee" / "Data";
     }
     return {};
+#elif defined(__vita__)
+    return fs::path("ux0:data/wowee/Data");
 #else
     const char* home = std::getenv("HOME");
     if (home == nullptr || *home == '\0') return {};

@@ -1,7 +1,7 @@
 # PlayStation Vita build (VITA-4). Included from the root CMakeLists.txt when the VitaSDK toolchain
 # file is in use (VITA is set by $VITASDK/share/vita.toolchain.cmake). It defines the Vita targets
 # itself and the root file returns right after, so none of the desktop targets are configured.
-# For now it only builds a stub eboot; the real sources are switched on by later items.
+# For now it builds the startup path only (VITA-6); the real sources are switched on by later items.
 
 set(WOWEE_PLATFORM_VITA ON)
 add_compile_definitions(WOWEE_PLATFORM_VITA=1)
@@ -34,9 +34,41 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--gc-sections")
 set(WOWEE_VITA_SRC_DIR ${CMAKE_CURRENT_LIST_DIR}/../../src/platform/vita)
 set(WOWEE_VITA_RES_DIR ${CMAKE_CURRENT_LIST_DIR}/../../resources/vita)
 
-add_executable(wowee ${WOWEE_VITA_SRC_DIR}/main_stub.cpp)
+# The startup path (VITA-6): the shared main.cpp up to the point where the Application would be
+# built, with the logger and the config paths it uses, plus the Vita platform layer. The rest of
+# the tree joins as the headless core (VITA-9) and the Vulkan-free UI (VITA-12) land.
+set(WOWEE_ROOT_DIR ${CMAKE_CURRENT_LIST_DIR}/../..)
+set(WOWEE_VITA_HEAP_MB 192 CACHE STRING "newlib heap in MB (compile-time: newlib reads it before main)")
+set(WOWEE_VITA_STACK_MB 4 CACHE STRING "main thread stack in MB")
+
+# include/core/version.hpp, generated the way the root file does (cmake/GitVersion.cmake).
+set(WOWEE_VERSION_HEADER ${CMAKE_BINARY_DIR}/generated/core/version.hpp)
+set(WOWEE_VERSION_SCRIPT_ARGS
+    -DSRC_DIR=${WOWEE_ROOT_DIR}
+    -DIN_FILE=${WOWEE_ROOT_DIR}/include/core/version.hpp.in
+    -DOUT_FILE=${WOWEE_VERSION_HEADER}
+    -P ${WOWEE_ROOT_DIR}/cmake/GitVersion.cmake)
+execute_process(COMMAND ${CMAKE_COMMAND} ${WOWEE_VERSION_SCRIPT_ARGS})
+add_custom_target(wowee_version ALL
+    COMMAND ${CMAKE_COMMAND} ${WOWEE_VERSION_SCRIPT_ARGS}
+    BYPRODUCTS ${WOWEE_VERSION_HEADER}
+    COMMENT "Resolving version from git"
+    VERBATIM)
+
+add_executable(wowee
+    ${WOWEE_ROOT_DIR}/src/main.cpp
+    ${WOWEE_ROOT_DIR}/src/core/logger.cpp
+    ${WOWEE_ROOT_DIR}/src/core/config_paths.cpp
+    ${WOWEE_VITA_SRC_DIR}/vita_main.cpp
+    ${WOWEE_VITA_SRC_DIR}/vita_cxa_guard.cpp
+    ${WOWEE_VITA_SRC_DIR}/vita_env.cpp
+    ${WOWEE_VITA_SRC_DIR}/vita_log_sink.cpp)
+add_dependencies(wowee wowee_version)
+target_include_directories(wowee PRIVATE ${WOWEE_ROOT_DIR}/include ${CMAKE_BINARY_DIR}/generated)
+target_compile_definitions(wowee PRIVATE
+    WOWEE_VITA_HEAP_MB=${WOWEE_VITA_HEAP_MB} WOWEE_VITA_STACK_MB=${WOWEE_VITA_STACK_MB})
 target_link_libraries(wowee pthread
-    SceIofilemgr_stub SceLibKernel_stub SceSysmodule_stub)
+    SceIofilemgr_stub SceLibKernel_stub SceSysmodule_stub SceNet_stub SceNetCtl_stub ScePower_stub)
 
 # GCC 15's __gthread_active_p() tests a weak reference to pthread_cancel; without this std::thread
 # throws "Enable multithreading to use std::thread: Not owner" (see tools/vita/depcheck/CMakeLists.txt).

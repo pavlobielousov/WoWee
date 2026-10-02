@@ -26,7 +26,7 @@ SRC=tools/vita/devcheck BUILD=build-vita/devcheck tools/vita/build.sh   # the de
 ```
 
 The root build (`cmake/vita/Vita.cmake`, hooked from the root `CMakeLists.txt` when `VITA` is set) produces
-`build-vita/wowee.vpk`, title ID `WOWE00001`, a stub that writes `WoWee Vita` to `ux0:data/wowee/wowee.log`.
+`build-vita/wowee.vpk`, title ID `WOWE00001`. Since VITA-6 that is the shared startup path (section 12), not a stub: it logs and exits.
 Smoke test: `tools/vita/vita3k_macos.sh build-vita/wowee.vpk WOWE00001 --seconds 15` *(verified)*. The ELF for
 crash symbolization is `build-vita/wowee` (built with `-g`). The title ID is **not checked against VitaDB**
 (its list API returned nothing from here); art in `resources/vita/sce_sys/` is plain placeholder.
@@ -143,12 +143,13 @@ tools/vita/deploy.sh --logs                      # fetch ux0:data/wowee/* into b
 Decision: **two sinks, both always available.**
 
 1. **File** `ux0:data/wowee/<app>.log` (WoWee: `wowee.log`): survives crashes, fetched over FTP.
-2. **UDP net-logger** (optional): if `ux0:data/wowee/loghost.txt` contains `<ip>[:port]` (default
-   port 9999), each line is also sent as one UDP datagram. On the dev machine: `tools/vita/logsink.sh`
+2. **UDP net-logger** (optional): each line is also sent as one UDP datagram. devcheck reads
+   `ux0:data/wowee/loghost.txt` (`<ip>[:port]`); **WoWee reads `WOWEE_LOG_UDP=<ip>[:port]` from
+   `ux0:data/wowee/env.txt`** (section 12), default port 9999. On the dev machine: `tools/vita/logsink.sh`
    (a thin `nc -ul`). UDP is lossy by design; the file is the source of truth.
 
-`tools/vita/devcheck/main.c` is the reference implementation; the WoWee logger arm (a Vita arm in
-`src/core/logger.cpp` calling code under `src/platform/vita/`) comes with the platform work.
+`tools/vita/devcheck/main.c` is the reference implementation for devcheck; WoWee's own sink is the `__vita__` arm
+in `src/core/logger.cpp` calling `src/platform/vita/vita_log_sink.cpp`.
 
 ## 6. Crash dumps
 
@@ -300,3 +301,36 @@ c++ -std=c++20 -Wall -Wextra -Werror -Iinclude tools/vita/depcheck/devpath_test.
 
 The Vita arms are in `game/opcode_table.cpp` and `addons/addon_manager.cpp`. The other call sites in the VITA-35 list were probed and need no change: `auth_screen.cpp` (both sites), `config_paths.cpp` (the `current == root` comparison can miss on spelling, `app0:` vs `app0:/`, which only repeats a harmless chdir), `zone_manager.cpp` (`canonical()` of an existing file works), and `core/window.cpp:35` is macOS-only code.
 
+## 12. Platform layer: startup, env.txt, paths, logging (VITA-6) *(verified on Vita3K; hardware is VITA-34)*
+
+`src/platform/vita/` + `include/platform/vita/vita_platform.hpp`. The root build (`cmake/vita/Vita.cmake`) compiles the shared
+`src/main.cpp`, `core/logger.cpp` and `core/config_paths.cpp` with it. `main()` calls `platform::vita::initProcess()` first, runs the
+shared startup path, then `logStartupReport()` instead of building the `Application` (that needs the Vulkan renderer: VITA-9 and
+VITA-12), and returns normally, so the log is flushed by the static destructors.
+
+| Piece | Where | Notes |
+|---|---|---|
+| Heap and stack | `vita_main.cpp` | `_newlib_heap_size_user` = 192 MB, `sceUserMainThreadStackSize` = 4 MB. **Compile-time** (newlib reads them before `main`), so env.txt cannot change them: `cmake -DWOWEE_VITA_HEAP_MB=.. -DWOWEE_VITA_STACK_MB=..`. The real budget comes from VITA-23. |
+| Clocks, modules | `initProcess()` | ARM 444, bus 222, GPU 222, xbar 166 MHz; `SCE_SYSMODULE_NET`, `sceNetInit` (256 KB static buffer), `sceNetCtlInit`. Return codes are logged, not acted on. |
+| env.txt | `vita_env.cpp` | `ux0:data/wowee/env.txt`, `KEY=VALUE` lines applied with `setenv`, so `core/env.hpp` and every `getenv` switch work unchanged. LF or CRLF, `#` comments, blanks trimmed, optional `export `, optional quotes. The startup report lists the **keys** only (values may be credentials). Host test: `c++ -std=c++20 -Wall -Wextra -Werror -Iinclude tools/vita/depcheck/envfile_test.cpp src/platform/vita/vita_env.cpp -o /tmp/envfile_test && /tmp/envfile_test`. |
+| Data root | `data_paths.hpp` (`userDataRoot`), `initProcess()` | Default `ux0:data/wowee/Data` (set as `WOW_DATA_PATH` unless env.txt sets it). For SD2Vita or USB: `WOW_DATA_PATH=uma0:data/wowee/Data` in env.txt. |
+| Config root | `config_paths.cpp` | `ux0:data/wowee/config`; `WOWEE_CONFIG_ROOT` still wins. `getExecutableDir()` is empty on Vita, so there is no portable mode. |
+| Log file | `logger.cpp` | `ux0:data/wowee/wowee.log` (the `logs/` beside the working directory is skipped: `app0:` is read-only on a device). UDP sink as in section 5. |
+| Crash handling | none needed | A Vita build defines neither `__linux__` nor `__APPLE__`, so `main.cpp` takes the no-backtrace `signal()` path. Use core dumps (section 6). |
+| Clock | none needed | `std::chrono::steady_clock` works (VITA-3). `system_clock` returned 1970 timestamps on Vita3K, so log timestamps are not wall time there (check on hardware, VITA-34). |
+
+**Thread-safe statics are broken in libstdc++ on the Vita; `vita_cxa_guard.cpp` replaces them.** With `-Wl,-u,pthread_cancel` (needed for
+`std::thread`) the first function-local static with a non-trivial initialiser crashed in `__cxa_guard_acquire` (`pthread_mutex_lock` reads
+address 0), and once past that `__cxa_guard_release` failed in `pthread_cond_broadcast` (`__concurrence_lock_error` / `_broadcast_error` in the
+emulator log). Without the option the guards work but `std::thread` throws. WoWee is full of Meyers singletons (`Logger::getInstance` is the
+first), so a small lock-free `__cxa_guard_acquire/release/abort` (CAS on a per-guard owner word, `sceKernelDelayThread` while waiting) is linked
+into the executable and wins over libstdc++. Verified on Vita3K with 3 threads racing a slow initialiser: constructor ran once. **Any other Vita
+executable that uses function-local statics and `std::thread` needs the same file.** Not seen on hardware yet (VITA-34).
+
+Test (Vita3K): put an `env.txt` in `<pref-path>/ux0/data/wowee/` (for example `WOW_DATA_PATH=uma0:data/wowee/Data`, `WOWEE_LOG_UDP=127.0.0.1:9999`), then
+`tools/vita/vita3k_macos.sh build-vita/wowee.vpk WOWE00001 --seconds 12`; the app log shows the version line, heap and clocks, the env.txt keys and the
+resolved data and config roots. `vita3k_macos.sh` deletes `*.log` in that directory before a run but leaves `env.txt`, so delete your test `env.txt` afterwards.
+
+Not built yet, so no Vita arms yet: `core/open_url.cpp` (shells out to `xdg-open`), `https_get.cpp` / `update_check.cpp`, `screen_recorder.cpp`,
+`platform/process.hpp` (POSIX `kill`/`waitpid`) and `memory_monitor.cpp` (`<sys/sysinfo.h>`, VITA-23). They are outside the Vita source list, which
+is how they are "compiled out"; give each its arm in the item that adds it to the list.
