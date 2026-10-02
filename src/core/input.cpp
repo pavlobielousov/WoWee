@@ -40,7 +40,7 @@ void Input::update() {
 }
 
 void Input::setVirtualKey(SDL_Scancode key, bool held) {
-    if (key < 0 || key >= NUM_KEYS) return;
+    if (static_cast<unsigned>(key) >= static_cast<unsigned>(NUM_KEYS)) return;
     virtualKeyState[key] = held;
 }
 
@@ -54,12 +54,12 @@ void Input::clearVirtualKeys() {
 }
 
 bool Input::isKeyPressed(SDL_Scancode key) const {
-    if (key < 0 || key >= NUM_KEYS) return false;
+    if (static_cast<unsigned>(key) >= static_cast<unsigned>(NUM_KEYS)) return false;
     return currentKeyState[key];
 }
 
 bool Input::isKeyJustPressed(SDL_Scancode key) const {
-    if (key < 0 || key >= NUM_KEYS) return false;
+    if (static_cast<unsigned>(key) >= static_cast<unsigned>(NUM_KEYS)) return false;
     return currentKeyState[key] && !previousKeyState[key];
 }
 bool Input::isMouseButtonPressed(int button) const {
