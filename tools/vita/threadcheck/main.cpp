@@ -64,6 +64,60 @@ static void setAffinity(int mask) {
         static_cast<unsigned>(r), static_cast<unsigned>(sceKernelGetThreadCpuAffinityMask(sceKernelGetThreadId())));
 }
 
+
+// Core placement. The kernel does not say which core a thread runs on, so measure it: busy
+// threads count loop iterations for a fixed time. Two threads sharing a core get about one core's
+// worth between them; threads on different cores add up. `cores` is the affinity mask per thread
+// (0 = leave unrestricted). Prints each phase's total as a percentage of one core's baseline.
+static unsigned long long g_baseline = 0;
+
+static void placementPhase(const char* name, const std::vector<int>& cores) {
+    std::atomic<bool> go{false}, stop{false};
+    std::vector<unsigned long long> counts(cores.size(), 0);
+    std::vector<std::thread> ts;
+    for (size_t i = 0; i < cores.size(); ++i) {
+        ts.emplace_back([&, i] {
+            if (cores[i] != 0) sceKernelChangeThreadCpuAffinityMask(sceKernelGetThreadId(), cores[i]);
+            while (!go.load(std::memory_order_acquire)) sceKernelDelayThread(1000);
+            unsigned long long n = 0;
+            unsigned x = 1;
+            while (!stop.load(std::memory_order_relaxed)) {
+                for (int k = 0; k < 1000; ++k) x = x * 1664525u + 1013904223u;
+                asm volatile("" :: "r"(x));
+                ++n;
+            }
+            counts[i] = n;
+        });
+    }
+    sceKernelDelayThread(200 * 1000);  // let them start and pin
+    go.store(true, std::memory_order_release);
+    sceKernelDelayThread(1500 * 1000);
+    stop.store(true, std::memory_order_relaxed);
+    for (auto& t : ts) t.join();
+    unsigned long long total = 0;
+    for (auto c : counts) total += c;
+    if (g_baseline == 0) g_baseline = total;
+    out("placement.%s.threads=%d total_iterations=%llu percent_of_one_core=%llu\n", name,
+        static_cast<int>(cores.size()), total, total * 100 / g_baseline);
+}
+
+static void placementTest() {
+    const int c0 = SCE_KERNEL_CPU_MASK_USER_0, c1 = SCE_KERNEL_CPU_MASK_USER_1,
+              c2 = SCE_KERNEL_CPU_MASK_USER_2, all = SCE_KERNEL_CPU_MASK_USER_ALL;
+    placementPhase("one_thread_core1", {c1});          // the baseline: 100
+    placementPhase("two_threads_same_core1", {c1, c1}); // expect about 100
+    placementPhase("two_threads_core1_core2", {c1, c2}); // expect about 200
+    placementPhase("three_threads_core0_1_2", {c0, c1, c2}); // expect about 300
+    placementPhase("four_threads_unrestricted", {all, all, all, all}); // about 300 if core 3 stays unused
+    placementPhase("four_threads_no_affinity_call", {0, 0, 0, 0});     // same, no call at all
+}
+
+// Optional crash-on-purpose test of the MAIN thread stack (4 MB requested in vita_main.cpp).
+static void recurseMain() {
+    out("recurse_main=start\n");
+    recurse(0);
+}
+
 int main() {
     wowee::platform::vita::initProcess();  // heap, stack, sceNet, paths: the same start as the app
     sceIoMkdir("ux0:data", 0777);
@@ -119,6 +173,14 @@ int main() {
             describe(who);
         });
         rt.join();
+    }
+
+    placementTest();
+
+    SceUID mainFd = sceIoOpen("ux0:data/wowee/threadcheck.recurse_main", SCE_O_RDONLY, 0);
+    if (mainFd >= 0) {
+        sceIoClose(mainFd);
+        recurseMain();
     }
 
     // Optional, because it ends in a crash by design: with ux0:data/wowee/threadcheck.recurse
