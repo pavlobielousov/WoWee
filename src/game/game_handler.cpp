@@ -23,7 +23,6 @@
 #include "game/update_field_table.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
-#include "rendering/spell_visual_system.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/activity_sound_manager.hpp"
 #include "audio/combat_sound_manager.hpp"

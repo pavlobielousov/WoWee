@@ -30,6 +30,7 @@
 #include "rendering/renderer.hpp"
 #include "rendering/renderer_screen_effects.hpp"
 #include "rendering/renderer_player_pose.hpp"
+#include "rendering/renderer_spell_visuals.hpp"
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/vk_context.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -368,6 +369,8 @@ bool Application::initialize() {
     gameServices_.screenEffects = screenEffects_.get();
     playerPose_ = std::make_unique<rendering::RendererPlayerPose>(*renderer);
     gameServices_.playerPose = playerPose_.get();
+    spellVisuals_ = std::make_unique<rendering::RendererSpellVisuals>(*renderer);
+    gameServices_.spellVisuals = spellVisuals_.get();
     gameServices_.audioCoordinator = audioCoordinator_.get();
     gameServices_.assetManager = assetManager.get();
     rendering::EmoteRegistry::instance().setAssetManager(assetManager.get());
@@ -2091,6 +2094,8 @@ void Application::shutdown() {
     screenEffects_.reset();
     gameServices_.playerPose = nullptr;
     playerPose_.reset();
+    gameServices_.spellVisuals = nullptr;
+    spellVisuals_.reset();
     renderer.reset();
 
     // Shutdown audio coordinator after renderer (renderer may reference audio during shutdown)
