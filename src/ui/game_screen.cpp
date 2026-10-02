@@ -1260,7 +1260,7 @@ void GameScreen::renderEntityList(game::GameHandler& gameHandler) {
     const auto& entityManager = gameHandler.getEntityManager();
     const auto& entities = entityManager.getEntities();
 
-    ImGui::Text("Entities in View: %zu", entities.size());
+    ImGui::Text("Entities in View: %llu", static_cast<unsigned long long>(entities.size()));  // not %zu: newlib (Vita) drops it
     ImGui::Separator();
     ImGui::Spacing();
 
