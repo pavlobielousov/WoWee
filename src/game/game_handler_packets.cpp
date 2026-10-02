@@ -22,6 +22,7 @@
 #include "game/update_field_table.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
+#include "game/screen_effects.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/post_process_pipeline.hpp"
 #include "rendering/spell_visual_system.hpp"
@@ -504,14 +505,7 @@ void GameHandler::registerCoreOpcodes() {
                 else if (threshold == 2) addSystemChatMessage("You feel drunk.");
                 else if (threshold >= 3) addSystemChatMessage("You feel completely smashed.");
                 else addSystemChatMessage("You feel sober again.");
-                if (auto* renderer = services_.renderer) {
-                    if (auto* camera = renderer->getCameraController()) {
-                        camera->setIntoxication(amount);
-                    }
-                    if (auto* post = renderer->getPostProcessPipeline()) {
-                        post->setIntoxication(amount);
-                    }
-                }
+                if (auto* fx = services_.screenEffects) fx->setIntoxication(amount);
             }
             LOG_DEBUG("SMSG_CROSSED_INEBRIATION_THRESHOLD: guid=0x", std::hex, guid,
                       std::dec, " threshold=", threshold, " itemId=", itemId);

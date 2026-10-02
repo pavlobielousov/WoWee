@@ -24,6 +24,7 @@
 #include "game/expansion_profile.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "rendering/renderer.hpp"
+#include "game/screen_effects.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/post_process_pipeline.hpp"
 #include "rendering/spell_visual_system.hpp"
@@ -613,10 +614,7 @@ void GameHandler::selectCharacter(uint64_t characterGuid) {
     std::fill(std::begin(playerSpellCritPct_), std::end(playerSpellCritPct_), -1.0f);
     std::fill(std::begin(playerCombatRatings_), std::end(playerCombatRatings_), -1);
     if (spellHandler_) spellHandler_->resetAllState();
-    if (auto* renderer = services_.renderer) {
-        if (auto* camera = renderer->getCameraController()) camera->setIntoxication(0.0f);
-        if (auto* post = renderer->getPostProcessPipeline()) post->setIntoxication(0.0f);
-    }
+    if (auto* fx = services_.screenEffects) fx->setIntoxication(0.0f);
     spellFlatMods_.clear();
     spellPctMods_.clear();
     actionBar = {};
