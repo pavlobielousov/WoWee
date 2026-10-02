@@ -22,6 +22,7 @@
 #include "game/update_field_table.hpp"
 #include "game/expansion_profile.hpp"
 #include "rendering/renderer.hpp"
+#include "game/player_pose.hpp"
 #include "game/screen_effects.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/post_process_pipeline.hpp"
@@ -2412,10 +2413,11 @@ void GameHandler::registerRemainingOpcodes() {
         uint32_t impVisualId   = packet.readUInt32();
         if (impVisualId == 0) return;
         auto* renderer = services_.renderer;
-        if (!renderer) return;
+        auto* pose = services_.playerPose;
+        if (!renderer || !pose) return;
         glm::vec3 spawnPos;
         if (impTargetGuid == playerGuid) {
-            spawnPos = renderer->getCharacterPosition();
+            spawnPos = pose->position();
         } else {
             auto entity = entityController_->getEntityManager().getEntity(impTargetGuid);
             if (!entity) return;
