@@ -31,7 +31,8 @@
 namespace wowee {
 
 // Forward declarations
-namespace rendering { class Renderer; class RendererScreenEffects; class RendererPlayerPose; class RendererSpellVisuals; }
+namespace rendering { class Renderer; class RendererScreenEffects; class RendererPlayerPose; class RendererSpellVisuals;
+                        class RendererTransportWmoTarget; class RendererTransportM2Target; }
 namespace ui { class UIManager; class MapWindow; }
 namespace auth { class AuthHandler; }
 namespace game { class GameHandler; class World; class ExpansionRegistry; struct ExpansionProfile; }
@@ -252,6 +253,8 @@ private:
     std::unique_ptr<rendering::RendererScreenEffects> screenEffects_;  // game::IScreenEffects over renderer
     std::unique_ptr<rendering::RendererPlayerPose> playerPose_;        // game::IPlayerPose over renderer
     std::unique_ptr<rendering::RendererSpellVisuals> spellVisuals_;    // game::ISpellVisuals over renderer
+    std::unique_ptr<rendering::RendererTransportWmoTarget> transportWmo_;  // game::ITransportWmoTarget over renderer
+    std::unique_ptr<rendering::RendererTransportM2Target> transportM2_;    // game::ITransportM2Target over renderer
     std::unique_ptr<ui::UIManager> uiManager;
     std::unique_ptr<ui::MapWindow> mapWindow_;
     /// A failed open is not retried every frame; switching the setting off

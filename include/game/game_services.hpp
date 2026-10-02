@@ -2,10 +2,10 @@
 #include <cstdint>
 
 namespace wowee {
-namespace rendering { class Renderer; }
 namespace pipeline { class AssetManager; }
 namespace audio { class AudioCoordinator; }
-namespace game { class ExpansionRegistry; class IScreenEffects; class IPlayerPose; class ISpellVisuals; }
+namespace game { class ExpansionRegistry; class IScreenEffects; class IPlayerPose; class ISpellVisuals;
+              class ITransportWmoTarget; class ITransportM2Target; }
 
 namespace game {
 
@@ -13,12 +13,13 @@ namespace game {
 // Owned by Application, passed by reference to GameHandler at construction.
 // Replaces hidden Application::getInstance() singleton access.
 struct GameServices {
-    rendering::Renderer* renderer = nullptr;
     audio::AudioCoordinator* audioCoordinator = nullptr;
     // Null when there is no renderer (the headless core): the calls are skipped.
     IScreenEffects* screenEffects = nullptr;
     IPlayerPose* playerPose = nullptr;  // likewise
     ISpellVisuals* spellVisuals = nullptr;  // likewise
+    ITransportWmoTarget* transportWmo = nullptr;  // likewise
+    ITransportM2Target* transportM2 = nullptr;    // likewise
     pipeline::AssetManager* assetManager = nullptr;
     ExpansionRegistry* expansionRegistry = nullptr;
     uint32_t gryphonDisplayId = 0;

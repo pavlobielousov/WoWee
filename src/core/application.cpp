@@ -31,6 +31,7 @@
 #include "rendering/renderer_screen_effects.hpp"
 #include "rendering/renderer_player_pose.hpp"
 #include "rendering/renderer_spell_visuals.hpp"
+#include "rendering/renderer_transport_targets.hpp"
 #include "rendering/loot_sparkles.hpp"
 #include "rendering/vk_context.hpp"
 #include "audio/npc_voice_manager.hpp"
@@ -364,13 +365,16 @@ bool Application::initialize() {
     assetManager = std::make_unique<pipeline::AssetManager>();
 
     // Populate game services - all subsystems now available
-    gameServices_.renderer = renderer.get();
     screenEffects_ = std::make_unique<rendering::RendererScreenEffects>(*renderer);
     gameServices_.screenEffects = screenEffects_.get();
     playerPose_ = std::make_unique<rendering::RendererPlayerPose>(*renderer);
     gameServices_.playerPose = playerPose_.get();
     spellVisuals_ = std::make_unique<rendering::RendererSpellVisuals>(*renderer);
     gameServices_.spellVisuals = spellVisuals_.get();
+    transportWmo_ = std::make_unique<rendering::RendererTransportWmoTarget>(*renderer);
+    gameServices_.transportWmo = transportWmo_.get();
+    transportM2_ = std::make_unique<rendering::RendererTransportM2Target>(*renderer);
+    gameServices_.transportM2 = transportM2_.get();
     gameServices_.audioCoordinator = audioCoordinator_.get();
     gameServices_.assetManager = assetManager.get();
     rendering::EmoteRegistry::instance().setAssetManager(assetManager.get());
@@ -2096,6 +2100,16 @@ void Application::shutdown() {
     playerPose_.reset();
     gameServices_.spellVisuals = nullptr;
     spellVisuals_.reset();
+    // The transport manager outlives the renderer (it goes with the game handler), so it must not
+    // keep pointers to the adapters.
+    if (gameHandler && gameHandler->getTransportManager()) {
+        gameHandler->getTransportManager()->setWmoTarget(nullptr);
+        gameHandler->getTransportManager()->setM2Target(nullptr);
+    }
+    gameServices_.transportWmo = nullptr;
+    transportWmo_.reset();
+    gameServices_.transportM2 = nullptr;
+    transportM2_.reset();
     renderer.reset();
 
     // Shutdown audio coordinator after renderer (renderer may reference audio during shutdown)
@@ -2495,7 +2509,7 @@ void Application::performLogoutToLogin() {
 
     // Disconnect TransportManager from WMORenderer before tearing down
     if (gameHandler && gameHandler->getTransportManager()) {
-        gameHandler->getTransportManager()->setWMORenderer(nullptr);
+        gameHandler->getTransportManager()->setWmoTarget(nullptr);
     }
 
     if (gameHandler) {
@@ -5581,7 +5595,7 @@ void Application::setupTestTransport() {
     LOG_INFO("========================================");
 
     // Connect transport manager to WMO renderer
-    transportManager->setWMORenderer(wmoRenderer);
+    transportManager->setWmoTarget(gameServices_.transportWmo);
 
     // Connect WMORenderer to M2Renderer (for hierarchical transforms: doodads following WMO parents)
     if (renderer->getM2Renderer()) {

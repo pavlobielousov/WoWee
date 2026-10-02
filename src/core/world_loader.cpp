@@ -1000,8 +1000,9 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // Connect TransportManager to renderers (must happen AFTER initializeRenderers)
     if (gameHandler_ && gameHandler_->getTransportManager()) {
         auto* tm = gameHandler_->getTransportManager();
-        if (renderer_->getWMORenderer()) tm->setWMORenderer(renderer_->getWMORenderer());
-        if (renderer_->getM2Renderer()) tm->setM2Renderer(renderer_->getM2Renderer());
+        const auto& svc = gameHandler_->services();
+        if (renderer_->getWMORenderer()) tm->setWmoTarget(svc.transportWmo);
+        if (renderer_->getM2Renderer()) tm->setM2Target(svc.transportM2);
         LOG_DEBUG("TransportManager connected: wmoR=", (renderer_->getWMORenderer() ? "yes" : "NULL"),
                    " m2R=", (renderer_->getM2Renderer() ? "yes" : "NULL"));
     }
