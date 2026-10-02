@@ -22,6 +22,7 @@
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/m2_color_track.hpp"
 #include "core/logger.hpp"
+#include "core/size_utils.hpp"
 #include <cstring>
 #include <algorithm>
 
@@ -460,7 +461,7 @@ std::vector<T> readArray(const std::vector<uint8_t>& data, uint32_t offset, uint
     // Overflow-safe bounds check: avoid uint32 wrap on count * sizeof(T)
     size_t totalBytes = static_cast<size_t>(count) * sizeof(T);
     if (totalBytes / sizeof(T) != count) return result;  // multiplication overflowed
-    if (static_cast<size_t>(offset) + totalBytes > data.size()) return result;
+    if (!core::rangeFits(offset, totalBytes, data.size())) return result;
     // Sanity cap: refuse allocations > 64MB to prevent garbage counts from OOMing
     if (totalBytes > 64 * 1024 * 1024) return result;
 
@@ -470,10 +471,9 @@ std::vector<T> readArray(const std::vector<uint8_t>& data, uint32_t offset, uint
 }
 
 std::string readString(const std::vector<uint8_t>& data, uint32_t offset, uint32_t length) {
-    // Use size_t arithmetic to prevent uint32 wraparound (same fix as readArray).
-    // A crafted M2 with offset=0xFFFFFFFF, length=2 would wrap to 1 in uint32,
-    // passing the check and reading out of bounds.
-    if (static_cast<size_t>(offset) + static_cast<size_t>(length) > data.size()) {
+    // A crafted M2 with offset=0xFFFFFFFF, length=2 would wrap to 1 in uint32 - and in a 32-bit size_t -
+    // passing the check and reading out of bounds. rangeFits compares by subtraction, so it cannot wrap.
+    if (!core::rangeFits(offset, length, data.size())) {
         return "";
     }
 
@@ -1468,8 +1468,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
         static constexpr uint32_t EMITTER_SIZE_VANILLA = 0x1F8; // 504
         const uint32_t emitterSize = isVanilla ? EMITTER_SIZE_VANILLA : EMITTER_SIZE_WOTLK;
 
-        if (static_cast<size_t>(header.ofsParticleEmitters) +
-                static_cast<size_t>(header.nParticleEmitters) * emitterSize <= m2Data.size()) {
+        if (core::rangeFits(header.ofsParticleEmitters,
+                static_cast<uint64_t>(header.nParticleEmitters) * emitterSize, m2Data.size())) {
 
         // Build sequence flags for parseAnimTrack (WotLK only)
         std::vector<uint32_t> emSeqFlags;
@@ -1600,8 +1600,8 @@ M2Model M2Loader::load(const std::vector<uint8_t>& m2Data) {
     if (header.nRibbonEmitters > 0 && header.ofsRibbonEmitters > 0 &&
         header.nRibbonEmitters < 64 && header.version >= 264) {
 
-        if (static_cast<size_t>(header.ofsRibbonEmitters) +
-                static_cast<size_t>(header.nRibbonEmitters) * RIBBON_SIZE_WOTLK <= m2Data.size()) {
+        if (core::rangeFits(header.ofsRibbonEmitters,
+                static_cast<uint64_t>(header.nRibbonEmitters) * RIBBON_SIZE_WOTLK, m2Data.size())) {
 
             // Build sequence flags for parseAnimTrack
             std::vector<uint32_t> ribSeqFlags;

@@ -170,3 +170,65 @@ TEST_CASE("the track record does not read past a short file", "[m2-color]") {
     CHECK_FALSE(m2ColorTrackFirstKeyOffset(tiny.bytes.size(), 0, false,
                                            [&](uint32_t o) { return tiny.readU32(o); }, at));
 }
+
+namespace {
+
+// A reader that refuses to leave the buffer, so a bounds check that wraps
+// shows up as a flag rather than as a crash.
+struct SafeReader {
+    const Buffer& buf;
+    mutable bool outOfBounds = false;
+    uint32_t operator()(uint32_t at) const {
+        if (static_cast<uint64_t>(at) + 4 > buf.bytes.size()) {
+            outOfBounds = true;
+            return 0;
+        }
+        return buf.readU32(at);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("an offset near 2^32 is refused, not wrapped", "[m2-color]") {
+    // `size_t(offset) + 12 > fileSize` wraps in a 32-bit size_t: 0xFFFFFFF8 + 12 is 4, which "fits".
+    uint32_t at = 0;
+
+    Buffer vanilla(128);
+    vanilla.u32(20, 1);
+    vanilla.u32(24, 0xFFFFFFF8u);
+    SafeReader rv{vanilla};
+    CHECK_FALSE(m2ColorTrackFirstKeyOffset(vanilla.bytes.size(), 0, false, rv, at));
+    CHECK_FALSE(rv.outOfBounds);
+
+    // WotLK, first hop: the sequence array itself sits near the end of the address space.
+    Buffer w1(128);
+    w1.u32(12, 1);
+    w1.u32(16, 0xFFFFFFFCu);
+    SafeReader r1{w1};
+    CHECK_FALSE(m2ColorTrackFirstKeyOffset(w1.bytes.size(), 0, true, r1, at));
+    CHECK_FALSE(r1.outOfBounds);
+
+    // WotLK, second hop.
+    Buffer w2(128);
+    w2.u32(12, 1);
+    w2.u32(16, 64);
+    w2.u32(64, 1);
+    w2.u32(68, 0xFFFFFFF8u);
+    SafeReader r2{w2};
+    CHECK_FALSE(m2ColorTrackFirstKeyOffset(w2.bytes.size(), 0, true, r2, at));
+    CHECK_FALSE(r2.outOfBounds);
+}
+
+TEST_CASE("a track offset that wraps the key array address is refused", "[m2-color]") {
+    // trackOffset + 12 is uint32 arithmetic: 0xFFFFFFFC + 12 wraps to 8 on every target, which lands on
+    // perfectly valid bytes that were laid out as if they were a track.
+    Buffer buf(128);
+    buf.u32(8, 1);    // "nKeys"
+    buf.u32(12, 64);  // "ofsKeys"
+    buf.u32(64, 1);
+    buf.u32(68, 96);
+    uint32_t at = 0;
+    SafeReader r{buf};
+    CHECK_FALSE(m2ColorTrackFirstKeyOffset(buf.bytes.size(), 0xFFFFFFFCu, true, r, at));
+    CHECK_FALSE(r.outOfBounds);
+}

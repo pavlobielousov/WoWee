@@ -17,5 +17,14 @@ constexpr size_t clampToSizeT(uint64_t bytes) {
     return static_cast<size_t>(std::min<uint64_t>(bytes, std::numeric_limits<size_t>::max()));
 }
 
+/**
+ * True when the byte range [offset, offset + length) lies inside a buffer of `total` bytes.
+ * Written as a subtraction because `offset + length > total` wraps: in a 32-bit size_t, offset 0xFFFFFFFF and
+ * length 2 add up to 1, which "fits". Exact on every target, for any 64-bit inputs.
+ */
+constexpr bool rangeFits(uint64_t offset, uint64_t length, size_t total) {
+    return offset <= total && length <= total - offset;
+}
+
 } // namespace core
 } // namespace wowee
