@@ -30,6 +30,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "core/size_utils.hpp"
+
 namespace wowee::pipeline {
 
 /// Byte offset of a colour track's key array within the track record.
@@ -56,8 +58,10 @@ template <typename ReadU32>
 bool m2ColorTrackFirstKeyOffset(size_t fileSize, uint32_t trackOffset,
                                 bool wotlk, ReadU32&& readU32,
                                 uint32_t& outOffset) {
-    const uint32_t keysAt = trackOffset + m2ColorTrackKeysOffset(wotlk);
-    if (static_cast<size_t>(keysAt) + 8 > fileSize) return false;
+    // 64-bit: a uint32 sum wraps (0xFFFFFFFC + 12 is 8) onto bytes that are in bounds but are not the track.
+    const uint64_t keysAt64 = static_cast<uint64_t>(trackOffset) + m2ColorTrackKeysOffset(wotlk);
+    if (!core::rangeFits(keysAt64, 8, fileSize)) return false;
+    const uint32_t keysAt = static_cast<uint32_t>(keysAt64);
 
     const uint32_t count = readU32(keysAt);
     const uint32_t offset = readU32(keysAt + 4);
@@ -65,17 +69,17 @@ bool m2ColorTrackFirstKeyOffset(size_t fileSize, uint32_t trackOffset,
 
     if (!wotlk) {
         // The keys are the values.
-        if (static_cast<size_t>(offset) + 12 > fileSize) return false;
+        if (!core::rangeFits(offset, 12, fileSize)) return false;
         outOffset = offset;
         return true;
     }
 
     // One M2Array per sequence; take the first that holds anything.
-    if (static_cast<size_t>(offset) + 8 > fileSize) return false;
+    if (!core::rangeFits(offset, 8, fileSize)) return false;
     const uint32_t seqCount = readU32(offset);
     const uint32_t seqOffset = readU32(offset + 4);
     if (seqCount == 0 || seqOffset == 0) return false;
-    if (static_cast<size_t>(seqOffset) + 12 > fileSize) return false;
+    if (!core::rangeFits(seqOffset, 12, fileSize)) return false;
     outOffset = seqOffset;
     return true;
 }

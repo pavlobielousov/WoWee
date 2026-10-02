@@ -2178,6 +2178,12 @@ target_link_libraries(test_m2_color_track PRIVATE catch2_main)
 add_test(NAME m2_color_track COMMAND test_m2_color_track)
 register_test_target(test_m2_color_track)
 
+# ── test_size_utils ──────────────────────────────────────────
+# Byte-count helpers that must not wrap in a 32-bit size_t (the bounds check
+# `offset + length > size` does). Header only. Meaningful on the armhf check.
+wowee_add_test(test_size_utils
+    SOURCES test_size_utils.cpp)
+
 # ── test_dbc_layout_columns ──────────────────────────────────
 # Every column a layout names has to exist in the file it describes. A DBC
 # asked for a field past the end answers zero for every row, forever, which
