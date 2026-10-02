@@ -9,6 +9,7 @@
 
 #include "core/https_get.hpp"
 #include "core/logger.hpp"
+#include "core/thread_budget.hpp"
 #include "core/config_paths.hpp"
 #include "core/version.hpp"
 
@@ -96,6 +97,7 @@ void UpdateCheck::start() {
 }
 
 void UpdateCheck::run() {
+    enterThread(ThreadRole::UpdateCheck);
     const std::string agent = std::string("WoWee/") + kVersion;
     const HttpsResponse reply = httpsGet(kHost, kPath, agent);
 

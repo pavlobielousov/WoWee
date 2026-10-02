@@ -18,6 +18,7 @@
 #include "pipeline/wowee_building.hpp"
 #include "pipeline/wowee_collision.hpp"
 #include "core/memory_monitor.hpp"
+#include "core/thread_budget.hpp"
 #include "core/profiler.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/adt_loader.hpp"
@@ -164,7 +165,8 @@ bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer*
     // Start background worker pool (dynamic: scales with available cores)
     // Keep defaults moderate; env override can increase if streaming is bottlenecked.
     workerRunning.store(true);
-    workerCount = computeTerrainWorkerCount();
+    workerCount = static_cast<int>(core::platformWorkerCount(
+        core::ThreadRole::TerrainWorker, static_cast<size_t>(computeTerrainWorkerCount())));
     workerThreads.reserve(workerCount);
     for (int i = 0; i < workerCount; i++) {
         workerThreads.emplace_back(&TerrainManager::workerLoop, this);
@@ -1339,6 +1341,7 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
 }
 
 void TerrainManager::workerLoop() {
+    core::enterThread(core::ThreadRole::TerrainWorker);
     // Leave placement to the OS scheduler. Artificially reserving CPU 0 made
     // this worker policy depend on the old main-thread pin and reduced the
     // scheduler's ability to balance streaming with render workers.

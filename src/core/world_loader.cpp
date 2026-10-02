@@ -11,6 +11,7 @@
 #include "core/window.hpp"
 #include "core/coordinates.hpp"
 #include "core/logger.hpp"
+#include "core/thread_budget.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/vk_context.hpp"
@@ -1309,11 +1310,13 @@ void WorldLoader::startWorldPreload(uint32_t mapId, const std::string& mapName,
     auto* am = assetManager_;
     std::string mn = mapName;
 
-    int numWorkers = std::min(static_cast<int>(jobs->size()), 4);
+    int numWorkers = static_cast<int>(core::platformWorkerCount(
+        core::ThreadRole::WorldPreload, static_cast<size_t>(std::min(static_cast<int>(jobs->size()), 4))));
     auto nextJob = std::make_shared<std::atomic<int>>(0);
 
     for (int w = 0; w < numWorkers; w++) {
         worldPreload_->workers.emplace_back([am, mn, jobs, nextJob, cancelFlag]() {
+            core::enterThread(core::ThreadRole::WorldPreload);
             while (!cancelFlag->load(std::memory_order_relaxed)) {
                 int idx = nextJob->fetch_add(1, std::memory_order_relaxed);
                 if (idx >= static_cast<int>(jobs->size())) break;

@@ -310,7 +310,7 @@ VITA-12), and returns normally, so the log is flushed by the static destructors.
 
 | Piece | Where | Notes |
 |---|---|---|
-| Heap and stack | `vita_main.cpp` | `_newlib_heap_size_user` = 192 MB, `sceUserMainThreadStackSize` = 4 MB. **Compile-time** (newlib reads them before `main`), so env.txt cannot change them: `cmake -DWOWEE_VITA_HEAP_MB=.. -DWOWEE_VITA_STACK_MB=..`. The real budget comes from VITA-23. |
+| Heap and stack | `vita_main.cpp` | `_newlib_heap_size_user` = 192 MB, `sceUserMainThreadStackSize` = 4 MB (**only in effect with the `-Wl,-u,sceUserMainThreadStackSize` link option, added by VITA-8; before that the main thread had 256 KB on hardware**, see section 13). **Compile-time** (newlib reads them before `main`), so env.txt cannot change them: `cmake -DWOWEE_VITA_HEAP_MB=.. -DWOWEE_VITA_STACK_MB=..`. The real budget comes from VITA-23. |
 | Clocks, modules | `initProcess()` | ARM 444, bus 222, GPU 222, xbar 166 MHz; `SCE_SYSMODULE_NET`, `sceNetInit` (256 KB static buffer), `sceNetCtlInit`. Return codes are logged, not acted on. |
 | env.txt | `vita_env.cpp` | `ux0:data/wowee/env.txt`, `KEY=VALUE` lines applied with `setenv`, so `core/env.hpp` and every `getenv` switch work unchanged. LF or CRLF, `#` comments, blanks trimmed, optional `export `, optional quotes. The startup report lists the **keys** only (values may be credentials). Host test: `c++ -std=c++20 -Wall -Wextra -Werror -Iinclude tools/vita/depcheck/envfile_test.cpp src/platform/vita/vita_env.cpp -o /tmp/envfile_test && /tmp/envfile_test`. |
 | Data root | `data_paths.hpp` (`userDataRoot`), `initProcess()` | Default `ux0:data/wowee/Data` (set as `WOW_DATA_PATH` unless env.txt sets it). For SD2Vita or USB: `WOW_DATA_PATH=uma0:data/wowee/Data` in env.txt. |
@@ -334,3 +334,80 @@ resolved data and config roots. `vita3k_macos.sh` deletes `*.log` in that direct
 Not built yet, so no Vita arms yet: `core/open_url.cpp` (shells out to `xdg-open`), `https_get.cpp` / `update_check.cpp`, `screen_recorder.cpp`,
 `platform/process.hpp` (POSIX `kill`/`waitpid`) and `memory_monitor.cpp` (`<sys/sysinfo.h>`, VITA-23). They are outside the Vita source list, which
 is how they are "compiled out"; give each its arm in the item that adds it to the list.
+
+## 13. Threads: budget, cores, priorities, stacks (VITA-8) *(probe verified on Vita3K and on a real Vita Slim; the client-level layout is VITA-34)*
+
+`include/core/thread_budget.hpp` (platform-neutral; off the Vita it returns what the caller computed and does nothing) and
+`src/platform/vita/vita_threads.cpp`. Two calls: `core::platformWorkerCount(role, desktopValue)` for how many threads (or tasks in flight) a
+role gets, and `core::enterThread(role)`, the first line of a thread body, which pins the thread to its cores and sets its priority.
+
+| Role | Count | Cores (`SCE_KERNEL_CPU_MASK_USER_*`) | Priority (lower runs first) |
+|---|---|---|---|
+| main | 1 | 0 | 160 (system default) |
+| network pump | 1 | 1 | 112 |
+| frame workers (`ThreadPool::frameWorkers`) | 1 | 1+2 | 176 |
+| I/O workers (`ioWorkers`) | 1 | 1+2 | 184 |
+| terrain workers | 1 | 2 | 184 |
+| world preload | 1 | 2 | 188 |
+| update check | 1 | 2 | 188 |
+| watchdog | **0** (no thread: it only releases a desktop mouse grab) | - | - |
+| async creature / game object / equipment loads (in flight) | 1 each | 2 | 184 / 184 / 186 |
+
+The NPC composite pre-decode (`entity_spawner.cpp`, one launch per new humanoid display id, no in-flight limit of its own) goes through `core::launchBackground` (`thread_pool.hpp`): `std::async` on the desktop, the single I/O worker on the Vita. Not capped: the login backdrop decode (one launch), Warden (dropped on the Vita) and the detached normal-map threads in `character_renderer` (Vulkan renderer).
+
+No role ever gets the system core (core 3, `SCE_KERNEL_CPU_MASK_SYSTEM`). `WOWEE_TERRAIN_WORKERS` is not overridden on the Vita: it is
+applied inside `computeTerrainWorkerCount` before the budget is asked, and the budget still caps it at 1, so an env.txt value has no effect
+(`m2_renderer`, `wmo_renderer` and `character_renderer` keep their own `hardware_concurrency` formulas, because the Vulkan renderer does not
+build on the Vita and `rendering/` is left alone). The priorities are a first guess and need tuning on hardware.
+
+**Stacks.** pthread-embedded gives every `std::thread` a **32 KB stack** and libstdc++ never asks for more (measured, Vita3K). The ADT / M2 /
+WMO / BLP parsers run on worker threads, so `vita_threads.cpp` defines `__wrap_pthread_create` and the link has `-Wl,--wrap=pthread_create`
+(`cmake/vita/Vita.cmake`): any stack below `WOWEE_VITA_THREAD_STACK_KB` (default 512, a compile definition) is raised to it, a bigger request is
+left alone. **Every Vita executable that starts threads needs this link option** (like `-Wl,-u,pthread_cancel` and `vita_cxa_guard.cpp`).
+Cost: 512 KB per thread of app memory, about 4 MB for the layout above. `std::async` tasks get it too.
+
+**Probe: `tools/vita/threadcheck/`** (own CMake project, links the real `vita_threads.cpp` and the platform layer). Build and run:
+`SRC=tools/vita/threadcheck BUILD=build-vita/threadcheck tools/vita/build.sh`, then
+`tools/vita/vita3k_macos.sh build-vita/threadcheck/threadcheck.vpk THRC00001 --seconds 14`; results are in `build-vita/logs/THRC00001.app.log`
+(`threadcheck.log`: raw kernel values per thread and per role) and the `Vita thread:` lines in `wowee.log`. A file
+`ux0:data/wowee/threadcheck.recurse` in the Vita3K data dir adds the stack-exhaustion test (ends in a crash on purpose; the last
+`recurse.depth_kb` line is how deep it got). Delete `vita3k*.log` after each run.
+
+Measured on Vita3K (`[v3k]`; **the same on hardware is VITA-34**):
+
+| Fact | Value |
+|---|---|
+| `std::thread::hardware_concurrency()` | 0 |
+| Default stack: main thread / `std::thread` / raw pthread with no attr | 256 KB reported (the app sets 4 MB through `sceUserMainThreadStackSize`, the emulator still reports 256 KB) / **32 KB** / 32 KB |
+| With the wrap: `std::thread` stack, and recursion in one | 512 KB; 1 KB frames reached depth 512, then the process ended |
+| Default priority: main / new `std::thread` | 160 / the creator's priority (159 to 191 seen) |
+| `sceKernelChangeThreadCpuAffinityMask` with one user core, two cores, `USER_ALL` | succeeds, read back exactly (`0x10000`, `0x20000`, `0x40000`, `0x70000`) |
+| Same call with `SCE_KERNEL_CPU_MASK_SYSTEM` (core 3) | **refused**, `0x80028025`, mask unchanged |
+| A new thread's initial affinity | 0 (= no restriction, `cpu_now` reads `0x70000`) |
+| `sceKernelChangeThreadPriority` from inside the thread | succeeds (96, 112, 176 ... read back) |
+| `pthread_attr_getstacksize` of a fresh attr | 0 (so "below the wanted size" must include 0) |
+
+Vita3K does not schedule on real cores, so **only the API results are meaningful there, not that the threads run where they were told**.
+
+**Measured on a real Vita Slim (`[hw]`, 2026-10-02, threadcheck run over vitacompanion, VPK installed by hand in VitaShell; logs in `build-vita/logs-hw/`).** Same as Vita3K, except where noted:
+
+| Fact | Result |
+|---|---|
+| `hardware_concurrency()` | **0** |
+| `std::thread` stack with the wrapper | 512 KB; recursion with 1 KB frames reached depth 480, then the process crashed at the limit (so the usable stack matches). The unwrapped 32 KB default was **not** re-measured on hardware (the probe is always built with the wrapper) |
+| Affinity: one core, two cores, `USER_ALL`; priority 0x60 and back | all succeed and read back |
+| `SCE_KERNEL_CPU_MASK_SYSTEM` (core 3) | **refused**, `0x80028025`, mask unchanged |
+| Every role in the table above | cores, priority and 512 KB stack read back exactly as planned; the watchdog count is 0 |
+| Main thread at start | priority 160, affinity **`0x70000`** (Vita3K: 0) |
+| **Main thread stack** | **256 KB, not the 4 MB asked for**, until `-Wl,-u,sceUserMainThreadStackSize` was added: nothing references the symbol, so `--gc-sections` removed it from the ELF. Recursion on the main thread crashed at about 256 KB. With the option: recursion reached depth 4000 KB (1 KB frames) before the limit, and the info call reports 4096 KB. **Every Vita executable that sets the stack needs that option** (`Vita.cmake`, threadcheck) |
+| **Core placement** (busy threads, throughput vs one core) | one thread 100%; two on the **same** core 100%; two on cores 1 and 2 **201%**; three on cores 0-2 **303%**; four unrestricted **303%**, with and without an affinity call. So pinning works, threads on different cores run in parallel, and the app never gets a fourth core |
+| New thread's initial priority | the creator's (159 in the probe), affinity 0 |
+
+Still open on hardware: the priorities under real load (they are guesses) and the 30-minute session without unbounded thread creation. Both need the running client (VITA-9,
+VITA-10) and stay tasks on VITA-34. (`cpu_now` in the probe is the affinity mask read back, not the core in use; the placement rows above are what show where threads run. A busy thread at priority 159 starves a main thread at 160 on the same core: the placement test raises main's priority first, a hang found on the first hardware run.) The deliberate-crash run leaves a `psp2core-*.psp2dmp` in `ux0:data/`; delete it when done.
+
+**A trap (cause unknown, VITA-42):** an executable that links `core/logger.cpp` and the platform layer but is built **without**
+`-ffunction-sections -fdata-sections` and `-Wl,--gc-sections` stops at its first `LOG_*` call, right after the "writing the log to ..." line (no
+crash message in the emulator log, nothing after it). Bisected on Vita3K with the threadcheck probe (`-DTHREADCHECK_SECTIONS=` drops the flags,
+`-DTHREADCHECK_OPT=-O1` changes the optimisation): it hangs with the flags dropped at `-O1` and `-O2`, with or without `setLogLevel`, and never with
+them. `cmake/vita/Vita.cmake` has them, so the real `wowee.vpk` is fine; **copy them into any new Vita executable** that uses the logger.

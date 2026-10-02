@@ -62,7 +62,8 @@ add_executable(wowee
     ${WOWEE_VITA_SRC_DIR}/vita_main.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_cxa_guard.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_env.cpp
-    ${WOWEE_VITA_SRC_DIR}/vita_log_sink.cpp)
+    ${WOWEE_VITA_SRC_DIR}/vita_log_sink.cpp
+    ${WOWEE_VITA_SRC_DIR}/vita_threads.cpp)
 add_dependencies(wowee wowee_version)
 target_include_directories(wowee PRIVATE ${WOWEE_ROOT_DIR}/include ${CMAKE_BINARY_DIR}/generated)
 target_compile_definitions(wowee PRIVATE
@@ -73,6 +74,15 @@ target_link_libraries(wowee pthread
 # GCC 15's __gthread_active_p() tests a weak reference to pthread_cancel; without this std::thread
 # throws "Enable multithreading to use std::thread: Not owner" (see tools/vita/depcheck/CMakeLists.txt).
 target_link_options(wowee PRIVATE -Wl,-u,pthread_cancel)
+
+# pthread-embedded gives a std::thread a 32 KB stack; vita_threads.cpp wraps pthread_create to
+# raise it (VITA-8). Every Vita executable that starts threads needs both.
+target_link_options(wowee PRIVATE -Wl,--wrap=pthread_create)
+
+# sceUserMainThreadStackSize (vita_main.cpp) is read by the loader from the ELF, but nothing in the
+# program references it, so --gc-sections removed it and the main thread kept its 256 KB stack
+# (measured on hardware, VITA-8). -u keeps it.
+target_link_options(wowee PRIVATE -Wl,-u,sceUserMainThreadStackSize)
 
 # UNSAFE: extended memory and some sysmodules.
 vita_create_self(eboot.bin wowee UNSAFE)

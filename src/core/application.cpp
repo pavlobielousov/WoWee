@@ -24,6 +24,7 @@
 #include <limits>
 #include <utility>
 #include "core/logger.hpp"
+#include "core/thread_budget.hpp"
 #include "core/memory_monitor.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/loot_sparkles.hpp"
@@ -1337,7 +1338,10 @@ void Application::run() {
     // was to run the same three lines before rethrowing, plus a second copy of
     // them after the loop.
     std::atomic<bool> watchdogRunning{true};
-    std::thread watchdogThread([&watchdogRunning, &watchdogHeartbeatMs, &watchdogRequestRelease]() {
+    // It only exists to hand a stuck mouse grab back; platforms with no mouse grab (the Vita)
+    // get a budget of 0 and no thread.
+    auto watchdogBody = [&watchdogRunning, &watchdogHeartbeatMs, &watchdogRequestRelease]() {
+        core::enterThread(core::ThreadRole::Watchdog);
         bool signalledForCurrentStall = false;
         while (watchdogRunning.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -1357,7 +1361,11 @@ void Application::run() {
                 signalledForCurrentStall = false;
             }
         }
-    });
+    };
+    std::thread watchdogThread;
+    if (core::platformWorkerCount(core::ThreadRole::Watchdog, 1) > 0) {
+        watchdogThread = std::thread(std::move(watchdogBody));
+    }
 
     // Stops and joins on the way out of this scope, however that happens.
     struct WatchdogStop {

@@ -34,6 +34,7 @@
 #include <sstream>
 #include <cstring>
 #include <limits>
+#include "core/thread_budget.hpp"
 
 namespace wowee {
 namespace core {
@@ -357,7 +358,9 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
                 continue;
             }
 
-            const int maxAsync = unlimited ? (MAX_ASYNC_CREATURE_LOADS * 4) : MAX_ASYNC_CREATURE_LOADS;
+            const int maxAsync = static_cast<int>(core::platformWorkerCount(
+                core::ThreadRole::AsyncCreatureLoad,
+                static_cast<size_t>(unlimited ? (MAX_ASYNC_CREATURE_LOADS * 4) : MAX_ASYNC_CREATURE_LOADS)));
             if (static_cast<int>(asyncCreatureLoads_.size()) + asyncLaunched >= maxAsync) {
                 // Too many in-flight - defer to next frame
                 pendingCreatureSpawns_.push_back(s);
@@ -517,6 +520,7 @@ void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
             AsyncCreatureLoad load;
             load.future = std::async(std::launch::async,
                 [am, m2Path, modelId, s, skinPaths = std::move(displaySkinPaths)]() -> PreparedCreatureModel {
+                    core::enterThread(core::ThreadRole::AsyncCreatureLoad);
                     PreparedCreatureModel result;
                     result.guid = s.guid;
                     result.displayId = s.displayId;
@@ -777,7 +781,7 @@ void EntitySpawner::processDeferredEquipmentQueue() {
 
     if (deferredEquipmentQueue_.empty()) return;
     // Limit in-flight async equipment loads
-    if (asyncEquipmentLoads_.size() >= 2) return;
+    if (asyncEquipmentLoads_.size() >= core::platformWorkerCount(core::ThreadRole::AsyncEquipmentLoad, 2)) return;
 
     auto [guid, equipData] = deferredEquipmentQueue_.front();
     deferredEquipmentQueue_.erase(deferredEquipmentQueue_.begin());
@@ -802,6 +806,7 @@ void EntitySpawner::processDeferredEquipmentQueue() {
     AsyncEquipmentLoad load;
     load.future = std::async(std::launch::async,
         [am, guid, displayInfoIds, inventoryTypes, paths = std::move(texturePaths)]() -> PreparedEquipmentUpdate {
+            core::enterThread(core::ThreadRole::AsyncEquipmentLoad);
             PreparedEquipmentUpdate result;
             result.guid = guid;
             result.displayInfoIds = displayInfoIds;
@@ -980,7 +985,9 @@ void EntitySpawner::processGameObjectSpawnQueue() {
         bool isCached = isWmo && gameObjectDisplayIdWmoCache_.count(s.displayId);
 
         if (isWmo && !isCached && !modelPath.empty() &&
-            static_cast<int>(asyncGameObjectLoads_.size()) < kMaxAsyncLoads) {
+            asyncGameObjectLoads_.size() <
+                core::platformWorkerCount(core::ThreadRole::AsyncObjectLoad,
+                                          static_cast<size_t>(kMaxAsyncLoads))) {
             // Launch async WMO load - file I/O + parse on background thread
             auto* am = assetManager_;
             PendingGameObjectSpawn capture = s;
@@ -988,6 +995,7 @@ void EntitySpawner::processGameObjectSpawnQueue() {
             AsyncGameObjectLoad load;
             load.future = std::async(std::launch::async,
                 [am, capture, capturePath]() -> PreparedGameObjectWMO {
+                    core::enterThread(core::ThreadRole::AsyncObjectLoad);
                     PreparedGameObjectWMO result;
                     result.guid = capture.guid;
                     result.entry = capture.entry;
