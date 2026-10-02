@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/size_utils.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/vk_shader.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -858,7 +859,7 @@ private:
     std::unordered_map<std::string, TextureCacheEntry> textureCache;
     size_t textureCacheBytes_ = 0;
     uint64_t textureCacheCounter_ = 0;
-    size_t textureCacheBudgetBytes_ = 8192ull * 1024 * 1024;  // 8 GB default, overridden at init
+    size_t textureCacheBudgetBytes_ = core::clampToSizeT(8192ull * 1024 * 1024);  // 8 GB default, overridden at init
     std::unordered_set<std::string> failedTextureCache_;
     std::unordered_map<std::string, uint64_t> failedTextureRetryAt_;
     std::unordered_set<std::string> loggedTextureLoadFails_;

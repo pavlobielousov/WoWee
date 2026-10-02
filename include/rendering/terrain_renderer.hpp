@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "core/size_utils.hpp"
 #include "rendering/vk_shader.hpp"
 #include "rendering/shadow_params.hpp"
 
@@ -235,7 +236,7 @@ private:
     std::unordered_map<std::string, TextureCacheEntry> textureCache;
     size_t textureCacheBytes_ = 0;
     uint64_t textureCacheCounter_ = 0;
-    size_t textureCacheBudgetBytes_ = 4096ull * 1024 * 1024;
+    size_t textureCacheBudgetBytes_ = core::clampToSizeT(4096ull * 1024 * 1024);
     std::unordered_set<std::string> failedTextureCache_;
     std::unordered_set<std::string> loggedTextureLoadFails_;
     /// Cache entries handed out at or after this counter are never evicted.
