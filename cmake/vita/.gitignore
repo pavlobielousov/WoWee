@@ -1,0 +1,2 @@
+# The root .gitignore ignores *.cmake outside cmake/*.cmake; keep the Vita modules tracked without editing it.
+!*.cmake

@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 project(wowee VERSION 1.0.0 LANGUAGES C CXX)
+
+if(VITA)
+    include(cmake/vita/Vita.cmake)
+    return()
+endif()
+
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)

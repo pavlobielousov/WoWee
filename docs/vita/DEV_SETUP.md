@@ -21,9 +21,15 @@ Apple Silicon. `$VITASDK` and `PATH` are already set inside it.
   use `docker` or `podman`. Override with `CONTAINER_RUNTIME=...`, and the image with `VITASDK_IMAGE=...`.
 
 ```sh
-tools/vita/build.sh                                   # repo root (the real target arrives with VITA-4)
+tools/vita/build.sh                                   # repo root: stub build-vita/wowee.vpk (VITA-4)
 SRC=tools/vita/devcheck BUILD=build-vita/devcheck tools/vita/build.sh   # the dev-loop test app
 ```
+
+The root build (`cmake/vita/Vita.cmake`, hooked from the root `CMakeLists.txt` when `VITA` is set) produces
+`build-vita/wowee.vpk`, title ID `WOWE00001`, a stub that writes `WoWee Vita` to `ux0:data/wowee/wowee.log`.
+Smoke test: `tools/vita/vita3k_macos.sh build-vita/wowee.vpk WOWE00001 --seconds 15` *(verified)*. The ELF for
+crash symbolization is `build-vita/wowee` (built with `-g`). The title ID is **not checked against VitaDB**
+(its list API returned nothing from here); art in `resources/vita/sce_sys/` is plain placeholder.
 
 What the toolchain and its libraries can and cannot do (C++20, threads, `std::filesystem`, printf, OpenSSL, per-dependency
 verdicts) is in [DEPENDENCIES.md](DEPENDENCIES.md); `tools/vita/depcheck/` is the probe behind it.
