@@ -22,6 +22,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#if defined(__vita__)
+#include "platform/vita/device_path.hpp"
+#endif
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -57,6 +60,17 @@ inline std::filesystem::path userDataRoot() {
     }
     return fs::path(home) / ".local" / "share" / "wowee" / "Data";
 #endif
+#endif
+}
+
+/// Whether two paths name the same file or directory: fs::equivalent, except on the Vita, where
+/// that answers true for two different directories (VITA-41), so the paths themselves are compared.
+inline bool samePath(const std::filesystem::path& a, const std::filesystem::path& b,
+                     std::error_code& ec) {
+#if defined(__vita__)
+    return platform::vita::pathsEquivalent(a, b, ec);
+#else
+    return std::filesystem::equivalent(a, b, ec);
 #endif
 }
 
@@ -111,7 +125,7 @@ inline std::vector<std::string> extractionRoots() {
         roots.emplace_back(d);
     }
     std::error_code ec;
-    if (roots.empty() || !fs::equivalent(roots.front(), "Data", ec)) roots.emplace_back("Data");
+    if (roots.empty() || !samePath(roots.front(), "Data", ec)) roots.emplace_back("Data");
     return roots;
 }
 
@@ -141,7 +155,7 @@ inline int syncClientTables(const std::filesystem::path& installRoot,
     namespace fs = std::filesystem;
     std::error_code ec;
     if (installRoot.empty() || dataRoot.empty()) return 0;
-    if (fs::equivalent(installRoot, dataRoot, ec)) return 0;
+    if (samePath(installRoot, dataRoot, ec)) return 0;
 
     auto contents = [](const fs::path& p, std::string& out) {
         std::ifstream in(p, std::ios::binary);
