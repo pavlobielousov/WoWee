@@ -9,6 +9,7 @@
 #include "game/packet_parsers.hpp"
 #include "game/entity.hpp"
 #include "rendering/renderer.hpp"
+#include "game/player_pose.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/spell_visual_system.hpp"
@@ -341,10 +342,10 @@ uint32_t SpellHandler::resolveSpellVisualId(uint32_t spellId) {
 }
 
 bool SpellHandler::resolveUnitPosition(uint64_t guid, glm::vec3& outPos) {
-    auto* renderer = owner_.services().renderer;
-    if (!renderer) return false;
+    auto* pose = owner_.services().playerPose;
+    if (!pose) return false;
     if (guid == owner_.getPlayerGuid()) {
-        outPos = renderer->getCharacterPosition();
+        outPos = pose->position();
         return true;
     }
     auto entity = owner_.getEntityManager().getEntity(guid);
@@ -386,16 +387,15 @@ void SpellHandler::triggerImpactVisual(uint32_t spellId, uint64_t targetGuid) {
 void SpellHandler::launchRangedWeaponProjectile(uint32_t spellId, uint64_t targetGuid) {
     if (targetGuid == 0) targetGuid = owner_.getTargetGuid();
     auto* renderer = owner_.services().renderer;
+    auto* pose = owner_.services().playerPose;
     auto* assets = owner_.services().assetManager;
-    if (!renderer || !assets || targetGuid == 0) return;
+    if (!renderer || !pose || !assets || targetGuid == 0) return;
     auto* visuals = renderer->getSpellVisualSystem();
-    auto* characters = renderer->getCharacterRenderer();
-    if (!visuals || !characters) return;
+    if (!visuals) return;
 
-    glm::vec3 start = renderer->getCharacterPosition() + glm::vec3(0.0f, 0.0f, 1.0f);
-    glm::mat4 handTransform(1.0f);
-    if (characters->getAttachmentTransform(renderer->getCharacterInstanceId(), 1, handTransform))
-        start = glm::vec3(handTransform[3]);
+    glm::vec3 start = pose->position() + glm::vec3(0.0f, 0.0f, 1.0f);
+    glm::vec3 hand;
+    if (pose->attachmentPosition(1, hand)) start = hand;
 
     glm::vec3 end;
     if (!resolveUnitPosition(targetGuid, end)) return;
@@ -4084,10 +4084,11 @@ void SpellHandler::handlePlaySpellVisual(network::Packet& packet) {
     uint32_t visualId   = packet.readUInt32();
     if (visualId == 0) return;
     auto* renderer = owner_.services().renderer;
-    if (!renderer) return;
+    auto* pose = owner_.services().playerPose;
+    if (!renderer || !pose) return;
     glm::vec3 spawnPos;
     if (casterGuid == owner_.getPlayerGuid()) {
-        spawnPos = renderer->getCharacterPosition();
+        spawnPos = pose->position();
     } else {
         auto entity = owner_.getEntityManager().getEntity(casterGuid);
         if (!entity) return;

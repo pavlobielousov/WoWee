@@ -24,6 +24,7 @@
 #include "game/expansion_profile.hpp"
 #include "ui/framexml_takeover.hpp"
 #include "rendering/renderer.hpp"
+#include "game/player_pose.hpp"
 #include "game/screen_effects.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/post_process_pipeline.hpp"
@@ -1654,24 +1655,20 @@ void GameHandler::faceCanonicalYaw(float canonicalYaw) {
     // canonical yaw we just computed from positions. If it does not, the
     // per-frame resync replaces this with a different heading and the server
     // re-checks the arc against that instead.
-    if (auto* r = services_.renderer) {
-        const float fromRender = core::coords::characterYawDegToCanonical(r->getCharacterYaw());
+    if (auto* pose = services_.playerPose) {
+        const float fromRender = core::coords::characterYawDegToCanonical(pose->facingDeg());
         const float delta = core::coords::normalizeAngleRad(fromRender - canonicalYaw);
         if (std::abs(delta) > 0.2f) {
             LOG_WARNING("Facing mismatch: computed canonical=", canonicalYaw,
-                        " but the character's ", r->getCharacterYaw(),
+                        " but the character's ", pose->facingDeg(),
                         " deg maps to ", fromRender, " (off by ",
                         delta * 57.2957795f, " deg) - the resync will undo this");
         }
     }
 
     // The renderer owns facing; the game side is downstream of it every frame.
-    if (auto* renderer = services_.renderer) {
-        const float facingDeg = core::coords::canonicalToCharacterYawDeg(canonicalYaw);
-        renderer->setCharacterYaw(facingDeg);
-        if (auto* cc = renderer->getCameraController()) {
-            cc->setFacingYaw(facingDeg);
-        }
+    if (auto* pose = services_.playerPose) {
+        pose->setFacingDeg(core::coords::canonicalToCharacterYawDeg(canonicalYaw));
     }
 
     sendMovement(Opcode::MSG_MOVE_SET_FACING);
