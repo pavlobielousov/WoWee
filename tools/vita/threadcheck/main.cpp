@@ -116,6 +116,25 @@ static void placementTest() {
     placementPhase("four_threads_no_affinity_call", {0, 0, 0, 0});     // same, no call at all
 }
 
+// Function-local statics (src/platform/vita/vita_cxa_guard.cpp, VITA-42): three threads race to a
+// static with a slow initialiser. Expect one initialisation and 42 everywhere.
+static std::atomic<int> g_guardInits{0};
+static int guardedValue() {
+    static const int v = [] {
+        ++g_guardInits;
+        sceKernelDelayThread(50000);
+        return 42;
+    }();
+    return v;
+}
+static void guardRace() {
+    std::atomic<int> good{0};
+    std::vector<std::thread> ts;
+    for (int i = 0; i < 3; ++i) ts.emplace_back([&] { if (guardedValue() == 42) ++good; });
+    for (auto& t : ts) t.join();
+    out("guard_race.inits=%d values_ok=%d\n", g_guardInits.load(), good.load());
+}
+
 // Optional crash-on-purpose test of the MAIN thread stack (4 MB requested in vita_main.cpp).
 static void recurseMain() {
     out("recurse_main=start\n");
@@ -135,6 +154,7 @@ int main() {
     out("logger_main=ok\n");
     out("hardware_concurrency=%u\n", std::thread::hardware_concurrency());
     describe("main");
+    guardRace();
 
     std::thread t([] { describe("std_thread"); });
     t.join();
