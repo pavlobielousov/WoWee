@@ -228,11 +228,11 @@ Measured 2026-10-02 (Apple Silicon Mac, `container` VM with 10 GB / 8 CPUs; clea
 | Cross-configure of the whole tree (`-DWOWEE_BUILD_TESTS=ON`) | about 2 s |
 | Build of all 212 `test_*` targets | about 2 min (8 CPUs, cold) |
 | `ctest -j8` under `qemu-arm` (without `sweep_guard`) | 17 s wall; slowest `settings_apply_on_load` 16 s, `rt_bvh` 5 s |
-| Result | **213 of 217 pass**; the 4 failures are listed below |
+| Result | **213 of 217 pass**; the 4 failures are listed below. After VITA-39/VITA-40 (`warden_reloc` fixed, one test added): 215 of 218, the 3 left are not 32-bit results |
 | Sanity | binaries are `ELF32 ARM`, `sizeof(size_t) == 4`; running one directly fails with "Exec format error", so the emulator is needed |
 
 What the 4 failures are:
-- `warden_reloc`: **a real 32-bit bug.** `wardenRelocTargetFits` (`include/game/warden_module.hpp:70`) computes `static_cast<size_t>(target) + 4u <= moduleSize`; with a 32-bit `size_t`, `target = 0xFFFFFFFF` wraps to 3 and passes the bounds check, so an attacker-supplied Warden relocation could write at `image + 0xFFFFFFFF`. The test already covers it; it only fails on a 32-bit build. Not fixed in this item (Warden is dropped on Vita, but the code is shared and affects any 32-bit build): tracked as VITA-39.
+- `warden_reloc`: **a real 32-bit bug, fixed in VITA-39.** `wardenRelocTargetFits` (`include/game/warden_module.hpp:70`) computes `static_cast<size_t>(target) + 4u <= moduleSize`; with a 32-bit `size_t`, `target = 0xFFFFFFFF` wraps to 3 and passes the bounds check, so an attacker-supplied Warden relocation could write at `image + 0xFFFFFFFF`. The test already covers it; it only fails on a 32-bit build. Not fixed in the spike item (Warden is dropped on Vita, but the code is shared and affects any 32-bit build); fixed in VITA-39 with `core::rangeFits`, which also covers the import table check (`wardenImportTableFits`, same wrap with `importCount * 8`).
 - `extract_progress`: needs StormLib, which the image does not have for armhf (and the Vita does not need it).
 - `framexml_compiles`, `addon_xml_compiles`: not a 32-bit result. Their helper `framexml_compile_check` is not a `test_*` target, so the spike never built it, and they need `Data/interface`, which is absent (skipped, exit 77, on a desktop with data).
 - `sweep_guard` was excluded: it runs host Python sweeps, is not 32-bit relevant and exceeds a 120 s timeout there.

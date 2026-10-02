@@ -1084,7 +1084,7 @@ bool WardenModule::bindAPIs() {
     LOG_INFO("WardenModule: Binding Windows APIs for module...");
 
     if (moduleImageUsable_ && importCount_ != 0) {
-        if (importTableOffset_ + static_cast<size_t>(importCount_) * 8u > moduleSize_) {
+        if (!wardenImportTableFits(importTableOffset_, importCount_, moduleSize_)) {
             LOG_ERROR("WardenModule: Native import table out of bounds");
             return false;
         }

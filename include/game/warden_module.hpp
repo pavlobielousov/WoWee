@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <map>
 
+#include "core/size_utils.hpp"
+
 namespace wowee {
 namespace game {
 
@@ -68,7 +70,13 @@ inline constexpr uint32_t wardenAbsoluteRelocTarget(uint8_t first, uint8_t b1,
 }
 
 inline constexpr bool wardenRelocTargetFits(uint32_t target, size_t moduleSize) {
-    return static_cast<size_t>(target) + 4u <= moduleSize;
+    return core::rangeFits(target, 4, moduleSize);
+}
+
+/// The import table is `count` 8-byte descriptors at `offset`, both taken from the module. Both the product and the
+/// sum wrap in a 32-bit size_t; core::rangeFits compares by subtraction and cannot.
+inline constexpr bool wardenImportTableFits(uint32_t offset, uint32_t count, size_t moduleSize) {
+    return core::rangeFits(offset, static_cast<uint64_t>(count) * 8u, moduleSize);
 }
 
 class WardenModule {
