@@ -566,3 +566,19 @@ collision file and by the debug dump left in `wmo_renderer.cpp`). `debugDumpGrou
 
 **Trap:** the leading comment of a function is part of it. A first split left a doc comment and a constant (`kWMOGroupIndoor`) behind because upstream had glued them between a function and its comment; `check_move.py` and the Vita compile found it. New files must be added to **both** source lists in the root `CMakeLists.txt` (the client and the editor tool).
 
+## 19. GlProbe: vitaGL, DXT, FBO scaling and ImGui (VITA-13) *(builds and starts; the tests have not run anywhere yet)*
+
+`tools/vita/glprobe/` is a small app (title `GLPR00001`) that answers the vitaGL questions ADR-001 left open with `PASS`/`FAIL` lines in `ux0:data/wowee/glprobe.log` (and `sceClibPrintf`, which Vita3K copies into its own log).
+It uses only the fixed-function pipeline and reads pixels back with `glReadPixels`, so it needs no screenshot. Tests: context and memory pools (`vglMemFree/Total` per pool), clear colour, **DXT1 and DXT5 uploaded compressed**
+(`glCompressedTexImage2D`) and sampled, **a DXT1 mip level selected when minified**, **the 640x368 FBO scaled to 960x544**, **ImGui 1.92** (vendored) drawn, and a 120-frame loop with a frame-time number.
+`ux0:data/wowee/glprobe.mask` (hex: 1 clear, 2 DXT, 4 FBO, 8 ImGui, 16 frame loop) runs a subset, to bisect a crash.
+`SRC=tools/vita/glprobe BUILD=build-vita/glprobe tools/vita/build.sh`, then `tools/vita/vita3k_macos.sh build-vita/glprobe/glprobe.vpk GLPR00001 --seconds 20`.
+
+**Findings so far (Vita3K v0.2.1, 2026-10-03):**
+- **vitaGL initialisation needs `libshacccg.suprx` even for the fixed-function pipeline.** On Vita3K `vglInitExtended` returned false and the emulator log shows `Missing file at data/libshacccg.suprx` (and `data/external/...`) right before it. The same file is on the user's Vita (`ur0:/data/libshacccg.suprx`).
+  Unverified inference: vitaGL as built in the SDK loads the run-time shader compiler at start. Consequence for the project: **every user of the Vita client needs that file, with or without shaders**, and the release notes (VITA-32) must say so. The probe cannot run on Vita3K until that file is installed there.
+- Vita3K v0.2.1 (macOS) then **crashes the host process at exit** (`Unhandled EXC_BAD_ACCESS`) after the failed init. An emulator bug, not the probe's.
+- The stock ImGui `imgui_impl_opengl2.cpp` does not compile against vitaGL's headers (`glOrtho`, `glPushAttrib`/`glPopAttrib`, `glGetTexEnviv`, `GL_TEXTURE_BINDING_2D` are missing). The probe draws ImGui's draw data itself with fixed-function client arrays (about 60 lines, `imgui_gl_render`), which is also what a Vita backend is; the other candidate is `imgui_impl_opengl3` with the GLES2 shader path (needs the shader compiler, i.e. the same file).
+- `imgui.cpp` needs `IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS` on the Vita (it calls `fork`/`execvp`/`waitpid`); the link needs `SceShaccCgExt taihen_stub` beside `vitashark`; vitaGL's headers do not include `GLES2/gl2ext.h`, so the S3TC constants are defined in the probe.
+- **Trap:** `build-vita/logs/vita3k.log` contains binary bytes; use `grep -a`, or grep silently prints nothing.
+
