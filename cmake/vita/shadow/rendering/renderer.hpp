@@ -386,6 +386,34 @@ public:
     void setSunShaftsEnabled(bool enabled) { sunShaftsEnabled_ = enabled; }
     int getTerrainLoadRadius() const;
     int getTerrainUnloadRadius() const { return getTerrainLoadRadius() + 3; }
+    /// The same, as a plain sample count (1, 2, 4 or 8: Vulkan's enum values are the counts), for callers that
+    /// must not name a Vulkan type (VITA-12).
+    void setMsaaSamples(int samples);
+
+    /// Group texture uploads under one GPU submission instead of one wait each (VITA-12: callers used to reach for
+    /// the Vulkan context to do this). begin, upload any number of textures, then end; endUploadBatch() submits and
+    /// returns, endUploadBatchSync() submits and waits (for loading screens). All three do nothing without a
+    /// renderer context.
+    void beginUploadBatch();
+    void endUploadBatch();
+    void endUploadBatchSync();
+
+    /// The GPU is gone for good (a device reset it did not recover from); the application exits. False without a
+    /// renderer context.
+    [[nodiscard]] bool isDeviceLost() const;
+    /// Wait for the GPU to finish what it has, naming the caller in the log if the wait itself fails. Does nothing
+    /// without a renderer context.
+    void waitIdle(const char* where);
+    /// The same, but only if the device is still there (waiting on a lost one only reports the loss again).
+    void waitIdleUnlessLost();
+    /// The GPU's own per-pass times for the last completed frame, in milliseconds, for the frame profile; empty
+    /// without a renderer context or timestamps.
+    [[nodiscard]] const std::vector<std::pair<const char*, double>>& gpuTimings() const;
+    /// Re-run the quest marker renderer's one-time setup against the current context; harmless if already done.
+    void reinitQuestMarkers(pipeline::AssetManager* assets);
+    /// The most samples the device can do, as a plain count; INT_MAX when there is no renderer context, which
+    /// reads as "no limit known" and clamps nothing.
+    [[nodiscard]] int getMaxMsaaSamples() const;
 
     // Post-process pipeline API - delegates to PostProcessPipeline (§4.3)
     PostProcessPipeline* getPostProcessPipeline() const;

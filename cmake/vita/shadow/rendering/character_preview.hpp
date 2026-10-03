@@ -4,6 +4,7 @@
 
 #include "game/character.hpp"
 #include <glm/glm.hpp>
+#include "rendering/ui_texture.hpp"
 #include <memory>
 #include <cstdint>
 #include <string>
@@ -88,6 +89,7 @@ public:
 
     // Returns the ImGui texture handle. Returns VK_NULL_HANDLE until the first
     // compositePass has run (image is in UNDEFINED layout before that).
+    [[nodiscard]] UiTexture getTextureId() const;
     [[nodiscard]] int getWidth() const { return fboWidth_; }
     [[nodiscard]] int getHeight() const { return fboHeight_; }
 

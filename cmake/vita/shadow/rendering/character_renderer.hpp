@@ -2,6 +2,7 @@
 // The Vita's copy: every declaration that mentions Vulkan is removed (ADR-001, VITA-52).
 #pragma once
 
+#include "rendering/gpu_texture.hpp"
 
 #include "pipeline/m2_loader.hpp"
 #include "pipeline/blp_loader.hpp"
@@ -101,6 +102,8 @@ public:
 
     /// Counts the head-batch diagnostic lines so it stops after a few.
     int headBatchCanaryCount_ = 0;
+    void setGroupTextureOverride(uint32_t instanceId, uint16_t geosetGroup, GpuTexture* texture);
+    void setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, GpuTexture* texture);
     void clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot);
     void setInstanceVisible(uint32_t instanceId, bool visible);
     void removeInstance(uint32_t instanceId);
@@ -310,16 +313,26 @@ private:
 public:
     /**
      * Build a composited character skin texture by alpha-blending overlay
+     * layers onto a base skin BLP. Returns the resulting VkTexture*.
+     */
+    GpuTexture* compositeTextures(const std::vector<std::string>& layerPaths);
 
     /**
      * Build a composited character skin with explicit region-based equipment overlays.
      */
+    GpuTexture* compositeWithRegions(const std::string& basePath,
+                                const std::vector<std::string>& baseLayers,
+                                const std::vector<std::pair<int, std::string>>& regionLayers);
 
     /** Clear the composite texture cache (forces re-compositing on next call). */
     void clearCompositeCache();
 
+    /** Load a BLP texture from MPQ and return VkTexture* (cached). */
+    GpuTexture* loadTexture(const std::string& path);
+    [[nodiscard]] GpuTexture* getTransparentTexture() const;
 
     /** Replace a loaded model's texture at the given slot. */
+    void setModelTexture(uint32_t modelId, uint32_t textureSlot, GpuTexture* texture);
 
 
 

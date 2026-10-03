@@ -10,7 +10,6 @@
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
-#include "rendering/vk_context.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
@@ -247,7 +246,7 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     }
 
     // Composite base skin + face + underwear overlays
-    rendering::VkTexture* compositeTex = nullptr;
+    rendering::GpuTexture* compositeTex = nullptr;
     {
         std::vector<std::string> layers;
         layers.push_back(bodySkinPath);
@@ -261,7 +260,7 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
         }
     }
 
-    rendering::VkTexture* hairTex = nullptr;
+    rendering::GpuTexture* hairTex = nullptr;
     if (!hairTexturePath.empty()) {
         hairTex = charRenderer->loadTexture(hairTexturePath);
     }
@@ -269,7 +268,7 @@ void EntitySpawner::spawnOnlinePlayer(uint64_t guid,
     // ears, eyes and eyelashes from. CharSections names it in the skin row's
     // second texture, which the tables the game shipped leave blank - so on a
     // stock model this still falls through to the underwear art it always used.
-    rendering::VkTexture* skinExtraTex = nullptr;
+    rendering::GpuTexture* skinExtraTex = nullptr;
     if (!skinExtraPath.empty()) skinExtraTex = charRenderer->loadTexture(skinExtraPath);
     else if (!underwearPaths.empty()) skinExtraTex = charRenderer->loadTexture(underwearPaths[0]);
     else skinExtraTex = charRenderer->loadTexture(pelvisPath);
@@ -743,10 +742,10 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
                         }
                     }
 
-                    const rendering::VkTexture* whiteTex = charRenderer->loadTexture("");
-                    rendering::VkTexture* capeTexture = nullptr;
+                    const rendering::GpuTexture* whiteTex = charRenderer->loadTexture("");
+                    rendering::GpuTexture* capeTexture = nullptr;
                     for (const auto& candidate : capeCandidates) {
-                        rendering::VkTexture* tex = charRenderer->loadTexture(candidate);
+                        rendering::GpuTexture* tex = charRenderer->loadTexture(candidate);
                         if (tex && tex != whiteTex) {
                             capeTexture = tex;
                             break;
@@ -801,7 +800,7 @@ void EntitySpawner::setOnlinePlayerEquipment(uint64_t guid,
     const PlayerTextureSlots& slots = slotsIt->second;
     if (slots.skin < 0) return;
 
-    rendering::VkTexture* newTex = charRenderer->compositeWithRegions(st.bodySkinPath, st.underwearPaths, regionLayers);
+    rendering::GpuTexture* newTex = charRenderer->compositeWithRegions(st.bodySkinPath, st.underwearPaths, regionLayers);
     if (newTex) {
         charRenderer->setTextureSlotOverride(st.instanceId, static_cast<uint16_t>(slots.skin), newTex);
     }

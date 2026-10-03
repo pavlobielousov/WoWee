@@ -7,13 +7,12 @@
 #include "ui/text_edit.hpp"
 #include "ui/ui_services.hpp"
 #include "auth/auth_handler.hpp"
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 #include <string>
 #include <vector>
 #include <functional>
 #include <utility>
 
-namespace wowee { namespace rendering { class VkContext; } }
 
 namespace wowee { namespace ui {
 
@@ -202,12 +201,7 @@ private:
     std::future<DecodedBackground> bgDecodeFuture;
     bool bgDecodeStarted = false;
     bool uploadBackgroundImage(const unsigned char* pixels);
-    rendering::VkContext* bgVkCtx = nullptr;
-    VkImage bgImage = VK_NULL_HANDLE;
-    VkDeviceMemory bgMemory = VK_NULL_HANDLE;
-    VkImageView bgImageView = VK_NULL_HANDLE;
-    VkSampler bgSampler = VK_NULL_HANDLE;
-    VkDescriptorSet bgDescriptorSet = VK_NULL_HANDLE;
+    rendering::UiTexture bgTexture;
     int bgWidth = 0;
     int bgHeight = 0;
 

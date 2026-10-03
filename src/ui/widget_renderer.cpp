@@ -11,7 +11,6 @@
 #include "ui/framexml_takeover.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/blp_loader.hpp"
-#include "rendering/vk_context.hpp"
 #include "core/app_clock.hpp"
 #include "core/env_flag.hpp"
 #include "ui/interface_fonts.hpp"
@@ -35,7 +34,7 @@ namespace {
 
 /// A path that resolved to nothing. Stored rather than retried, so one bad
 /// SetTexture in an addon does not read a missing file every frame forever.
-constexpr VkDescriptorSet kMissing = VK_NULL_HANDLE;
+constexpr rendering::UiTexture kMissing = rendering::kNoUiTexture;
 
 uint32_t packColor(const float rgba[4], float alpha) {
     auto ch = [](float v) {
@@ -60,9 +59,9 @@ std::string strippedText(const std::string& in) {
 } // namespace
 
 void WidgetRenderer::initialize(pipeline::AssetManager* assets,
-                                rendering::VkContext* vkCtx) {
+                                rendering::IUiTextureService* uiTextures) {
     assets_ = assets;
-    vkCtx_ = vkCtx;
+    uiTextures_ = uiTextures;
 }
 
 // Additive art is uploaded as its own image, because the same file can be
@@ -71,7 +70,7 @@ static std::string cacheKey(const std::string& path, bool add) {
     return add ? path + "|add" : path;
 }
 
-const VkDescriptorSet* WidgetRenderer::cachedTexture(const std::string& path,
+const rendering::UiTexture* WidgetRenderer::cachedTexture(const std::string& path,
                                                      bool add) const {
     // The suffixed key is only built for additive art, which is a handful of
     // frames rather than the whole screen. Everything else looks the path up
@@ -80,9 +79,9 @@ const VkDescriptorSet* WidgetRenderer::cachedTexture(const std::string& path,
     return (it == textures_.end()) ? nullptr : &it->second;
 }
 
-VkDescriptorSet WidgetRenderer::resident(const std::string& path, bool add) const {
+rendering::UiTexture WidgetRenderer::resident(const std::string& path, bool add) const {
     if (path.empty()) return kMissing;
-    const VkDescriptorSet* set = cachedTexture(path, add);
+    const rendering::UiTexture* set = cachedTexture(path, add);
     return set ? *set : kMissing;
 }
 
@@ -139,11 +138,11 @@ std::vector<uint8_t> WidgetRenderer::readTextureFile(const std::string& path,
     return data;
 }
 
-VkDescriptorSet WidgetRenderer::texture(const std::string& path, bool add) {
+rendering::UiTexture WidgetRenderer::texture(const std::string& path, bool add) {
     const std::string key = cacheKey(path, add);
     auto it = textures_.find(key);
     if (it != textures_.end()) return it->second;
-    if (!assets_ || !vkCtx_ || path.empty()) return kMissing;
+    if (!assets_ || !uiTextures_ || path.empty()) return kMissing;
 
     std::string resolved;
     auto data = readTextureFile(path, resolved);
@@ -171,7 +170,7 @@ VkDescriptorSet WidgetRenderer::texture(const std::string& path, bool add) {
             image.data[i + 3] = static_cast<uint8_t>((image.data[i + 3] * lum) / 255);
         }
     }
-    VkDescriptorSet set = vkCtx_->uploadImGuiTexture(image.data.data(),
+    rendering::UiTexture set = uiTextures_->upload(image.data.data(),
                                                      image.width, image.height);
     textures_[key] = set;
     return set;
@@ -187,7 +186,7 @@ bool WidgetRenderer::textureSize(const std::string& path, float& w, float& h) {
         h = known->second.second;
         return true;
     }
-    // Deliberately no vkCtx_ here. Asking how big a picture is does not need a
+    // Deliberately no uiTextures_ here. Asking how big a picture is does not need a
     // GPU, and tying it to one would mean the headless harness could never
     // check any of this - which is what kept this fix unwritten.
     std::string resolved;
@@ -650,12 +649,12 @@ float WidgetRenderer::drawMarkupText(ImDrawList* dl, ImFont* font, float size,
                 // passes repeat the same runs offset by a pixel, and an icon
                 // drawn three times reads as a smear rather than as depth.
                 if (!forceColor) {
-                    VkDescriptorSet tex = resident(run.texture);
+                    rendering::UiTexture tex = resident(run.texture);
                     if (tex != kMissing) {
                         // Sat on the baseline like a capital, which is where
                         // the interface's own money frames put a coin.
                         const float top = y + (lineH - h) * 0.5f;
-                        dl->AddImage(reinterpret_cast<ImTextureID>(tex),
+                        dl->AddImage(tex.imguiId(),
                                      ImVec2(x, top), ImVec2(x + w, top + h),
                                      ImVec2(0, 0), ImVec2(1, 1),
                                      IM_COL32(255, 255, 255,
@@ -736,9 +735,9 @@ void WidgetRenderer::drawSimpleHtml(ImDrawList* dl, WidgetTree& tree,
             float ix = x0;
             if (align == "CENTER") ix = x0 + (boxW - dw) * 0.5f;
             else if (align == "RIGHT") ix = x1 - dw;
-            VkDescriptorSet tex = resident(b.src);
+            rendering::UiTexture tex = resident(b.src);
             if (tex != kMissing) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(ix, y),
+                dl->AddImage(tex.imguiId(), ImVec2(ix, y),
                              ImVec2(ix + dw, y + dh), ImVec2(0, 0), ImVec2(1, 1),
                              IM_COL32(255, 255, 255,
                                       static_cast<int>(w.alpha * 255.0f)));
@@ -777,7 +776,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
     const float bx1 = x1 - w.insetRight * scale;
     const float by1 = y1 - w.insetBottom * scale;
     if (bx1 > bx0 && by1 > by0) {
-        VkDescriptorSet bg = resident(w.bgFile);
+        rendering::UiTexture bg = resident(w.bgFile);
         const uint32_t col = packColor(w.backdropColor, w.alpha);
         if (bg != kMissing) {
             // Tiling repeats the art at its own size instead of stretching it,
@@ -790,7 +789,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
                 u1 = (bx1 - bx0) / (w.edgeSize * scale);
                 v1 = (by1 - by0) / (w.edgeSize * scale);
             }
-            dl->AddImage(reinterpret_cast<ImTextureID>(bg), ImVec2(bx0, by0), ImVec2(bx1, by1),
+            dl->AddImage(bg.imguiId(), ImVec2(bx0, by0), ImVec2(bx1, by1),
                          ImVec2(0.0f, 0.0f), ImVec2(u1, v1), col);
         }
         // A backdrop with no background file has no background - only its edge.
@@ -800,7 +799,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
         // still being read.
     }
 
-    VkDescriptorSet edge = resident(w.edgeFile);
+    rendering::UiTexture edge = resident(w.edgeFile);
     if (edge == kMissing || w.edgeSize <= 0.0f) return;
 
     // The edge file is eight square tiles in a row. Measured against the art
@@ -810,7 +809,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
     const uint32_t col = packColor(w.borderColor, w.alpha);
     auto piece = [&](int index, float px0, float py0, float px1, float py1) {
         const float u0 = index / 8.0f, u1 = (index + 1) / 8.0f;
-        dl->AddImage(reinterpret_cast<ImTextureID>(edge), ImVec2(px0, py0), ImVec2(px1, py1),
+        dl->AddImage(edge.imguiId(), ImVec2(px0, py0), ImVec2(px1, py1),
                      ImVec2(u0, 0.0f), ImVec2(u1, 1.0f), col);
     };
     // An edge is a run of square tiles, and the top and bottom ones are stored
@@ -866,7 +865,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
             const float len = std::min(step, span - at);
             const float frac = len / step;
             if (vertical) {
-                dl->AddImage(reinterpret_cast<ImTextureID>(edge),
+                dl->AddImage(edge.imguiId(),
                              ImVec2(px0, py0 + at), ImVec2(px1, py0 + at + len),
                              ImVec2(tu0, 0.0f), ImVec2(tu1, frac), col);
             } else {
@@ -877,7 +876,7 @@ void WidgetRenderer::drawBackdrop(ImDrawList* dl, const Widget& w, float scale,
                 // at the opposite side of its own tile, lands along the bottom
                 // by the same mapping. One rotation serves both.
                 const float ax0 = px0 + at, ax1 = px0 + at + len;
-                dl->AddImageQuad(reinterpret_cast<ImTextureID>(edge),
+                dl->AddImageQuad(edge.imguiId(),
                                  ImVec2(ax0, py0), ImVec2(ax1, py0),
                                  ImVec2(ax1, py1), ImVec2(ax0, py1),
                                  ImVec2(tu0, 0.0f),  ImVec2(tu0, frac),
@@ -907,13 +906,13 @@ void WidgetRenderer::drawStatusBar(ImDrawList* dl, const Widget& w,
     const float fy0 = w.barVertical ? y1 - (y1 - y0) * f : y0;
     const uint32_t col = packColor(w.barColor, w.alpha);
 
-    VkDescriptorSet tex = resident(w.barTexture);
+    rendering::UiTexture tex = resident(w.barTexture);
     if (tex != kMissing) {
         // The texture is cropped to the filled part rather than squashed into
         // it, so a bar at half value shows half its art at its own scale.
         const float u1 = w.barVertical ? 1.0f : f;
         const float v0 = w.barVertical ? (1.0f - f) : 0.0f;
-        dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, fy0), ImVec2(fx1, y1),
+        dl->AddImage(tex.imguiId(), ImVec2(x0, fy0), ImVec2(fx1, y1),
                      ImVec2(0.0f, v0), ImVec2(u1, 1.0f), col);
     } else if (w.barTexture.empty()) {
         dl->AddRectFilled(ImVec2(x0, fy0), ImVec2(fx1, y1), col);
@@ -1057,9 +1056,9 @@ void WidgetRenderer::drawColorPicker(ImDrawList* dl, const WidgetTree& tree,
 /// cannot be used at all.
 void WidgetRenderer::drawThumb(ImDrawList* dl, const Widget& w,
                                float x0, float y0, float x1, float y1) {
-    VkDescriptorSet tex = resident(w.texturePath);
-    if (tex != VK_NULL_HANDLE && tex != kMissing) {
-        dl->AddImage(reinterpret_cast<ImTextureID>(tex), ImVec2(x0, y0), ImVec2(x1, y1),
+    rendering::UiTexture tex = resident(w.texturePath);
+    if (tex != rendering::kNoUiTexture && tex != kMissing) {
+        dl->AddImage(tex.imguiId(), ImVec2(x0, y0), ImVec2(x1, y1),
                      ImVec2(w.texCoord[0], w.texCoord[2]),
                      ImVec2(w.texCoord[1], w.texCoord[3]));
         return;
@@ -1078,7 +1077,7 @@ void WidgetRenderer::drawSlider(ImDrawList* dl, const Widget& w,
     // with nothing to scroll.
     if (w.thumbRegion != 0) return;
 
-    VkDescriptorSet thumb = resident(w.thumbTexture);
+    rendering::UiTexture thumb = resident(w.thumbTexture);
     if (thumb == kMissing) return;
 
     // The thumb sits at the value along the track, and is as wide as the track
@@ -1091,13 +1090,13 @@ void WidgetRenderer::drawSlider(ImDrawList* dl, const Widget& w,
         // full value belongs at the top of the track.
         const float span = (y1 - y0) - size;
         const float top = y1 - size - f * span;
-        dl->AddImage(reinterpret_cast<ImTextureID>(thumb), ImVec2(x0, top),
+        dl->AddImage(thumb.imguiId(), ImVec2(x0, top),
                      ImVec2(x1, top + size), ImVec2(0, 0), ImVec2(1, 1), col);
     } else {
         const float size = y1 - y0;
         const float span = (x1 - x0) - size;
         const float left = x0 + f * span;
-        dl->AddImage(reinterpret_cast<ImTextureID>(thumb), ImVec2(left, y0),
+        dl->AddImage(thumb.imguiId(), ImVec2(left, y0),
                      ImVec2(left + size, y1), ImVec2(0, 0), ImVec2(1, 1), col);
     }
 }
@@ -1157,8 +1156,8 @@ void WidgetRenderer::layout(WidgetTree& tree, float screenW, float screenH) {
     // them all together. Drawing with one afterwards is a fault the GPU answers
     // by resetting, so the cache goes when they do - at the cost of re-uploading
     // whatever is on screen.
-    if (vkCtx_) {
-        const uint32_t generation = vkCtx_->uiTextureGeneration();
+    if (uiTextures_) {
+        const uint32_t generation = uiTextures_->generation();
         if (generation != uiTextureGenerationSeen_) {
             uiTextureGenerationSeen_ = generation;
             if (!textures_.empty()) {
@@ -2125,11 +2124,11 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     // - in WoW the client does - so without it picking something up looked
     // exactly like nothing happening.
     if (const std::string& carried = frameXmlCursorItem(); !carried.empty()) {
-        if (VkDescriptorSet icon = texture(carried); icon != kMissing) {
+        if (rendering::UiTexture icon = texture(carried); icon != kMissing) {
             const ImVec2 at = ImGui::GetIO().MousePos;
             const float side = 32.0f * tree.uiScale();
             ImDrawList* fg = ImGui::GetForegroundDrawList();
-            fg->AddImage(reinterpret_cast<ImTextureID>(icon),
+            fg->AddImage(icon.imguiId(),
                          ImVec2(at.x, at.y),
                          ImVec2(at.x + side, at.y + side));
         }
@@ -2231,10 +2230,10 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
     // asynchronous form would let this frame sample an image whose copy has not
     // landed. Nothing to upload means no batch at all, so an idle frame does
     // not allocate a command buffer to record nothing into.
-    if (!wanted.empty() && vkCtx_) {
-        vkCtx_->beginUploadBatch();
+    if (!wanted.empty() && uiTextures_) {
+        uiTextures_->beginUploadBatch();
         for (const auto& p : wanted) texture(*p.first, p.second);
-        vkCtx_->endUploadBatchSync();
+        uiTextures_->endUploadBatchSync();
     }
 
     // Interface units to pixels. The tree is laid out against a virtual screen
@@ -2381,11 +2380,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // a model frame is a window onto a scene and the art around it
             // belongs on top.
             if (w->externalTexture != 0) {
-                // NOLINTNEXTLINE(performance-no-int-to-ptr) - the widget holds
-                // the handle as an integer and ImTextureID is a pointer, so
-                // the cast is the API boundary rather than a choice.
-                dl->AddImage(reinterpret_cast<ImTextureID>(
-                                 reinterpret_cast<VkDescriptorSet>(w->externalTexture)),
+                dl->AddImage(rendering::UiTexture{w->externalTexture}.imguiId(),
                              ImVec2(x0, y0), ImVec2(x1, y1),
                              ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
                              packColor(w->color, w->alpha));
@@ -2778,25 +2773,22 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
             // paperdoll survived only because CharacterModelFrame is a Frame
             // rather than a Texture and takes a different branch.
             if (w->texturePath.empty() && w->externalTexture == 0) continue;
-            VkDescriptorSet tex = VK_NULL_HANDLE;
+            rendering::UiTexture tex = rendering::kNoUiTexture;
             if (w->externalTexture != 0) {
                 // Supplied by the client, and only valid for as long as it says
                 // so - a portrait's render target is recreated when the window
                 // resizes, and the widget is told each frame rather than
                 // holding a handle of its own.
-                // NOLINTNEXTLINE(performance-no-int-to-ptr) - as above, the
-                // handle is stored as an integer and VkDescriptorSet is a
-                // pointer.
-                tex = reinterpret_cast<VkDescriptorSet>(w->externalTexture);
+                tex = rendering::UiTexture{w->externalTexture};
             } else {
                 // Only what is already resident. Anything still queued draws on
                 // a later frame rather than forcing an upload here.
-                const VkDescriptorSet* set =
+                const rendering::UiTexture* set =
                     cachedTexture(w->texturePath, w->blendAdd);
                 if (!set || *set == kMissing) continue;
                 tex = *set;
             }
-            if (tex == VK_NULL_HANDLE) continue;
+            if (tex == rendering::kNoUiTexture) continue;
             // SetTexCoord is left/right/top/bottom in WoW's own order, and its
             // vertical sense already matches the image, so it passes through.
             //
@@ -2836,7 +2828,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 // angle. WoW's order is upper-left, lower-left, upper-right,
                 // lower-right; the quad wants them going round the rect.
                 const float* q = w->texCoordQuad;
-                dl->AddImageQuad(reinterpret_cast<ImTextureID>(tex),
+                dl->AddImageQuad(tex.imguiId(),
                                  ImVec2(x0, y0), ImVec2(x1, y0),
                                  ImVec2(x1, y1), ImVec2(x0, y1),
                                  ImVec2(q[0], q[1]),   // upper-left
@@ -2862,7 +2854,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 const float rx = (x1 - x0) * 0.5f;
                 const float ry = (y1 - y0) * 0.5f;
                 const ImU32 col = packColor(w->color, w->alpha);
-                dl->PushTextureID(reinterpret_cast<ImTextureID>(tex));
+                dl->PushTextureID(tex.imguiId());
                 dl->PrimReserve(kSegments * 3, kSegments + 1);
                 const unsigned int base = dl->_VtxCurrentIdx;
                 dl->PrimWriteVtx(centre,
@@ -2886,7 +2878,7 @@ void WidgetRenderer::draw(WidgetTree& tree, float screenW, float screenH) {
                 }
                 dl->PopTextureID();
             } else {
-                dl->AddImage(reinterpret_cast<ImTextureID>(tex),
+                dl->AddImage(tex.imguiId(),
                              ImVec2(x0, y0), ImVec2(x1, y1), uv0, uv1,
                              packColor(w->color, w->alpha));
             }

@@ -106,8 +106,8 @@ public:
     void rotate(float yawDelta);
 
     /// The rendered portrait, or zero until the first composite has run. The
-    /// value is a VkDescriptorSet, carried as an integer so this header does
-    /// not drag Vulkan into the widget tree.
+    /// value is a rendering::UiTexture id (the number ImGui draws), carried as
+    /// a plain integer so this header does not need the type.
     [[nodiscard]] uint64_t textureId() const;
 
     void shutdown(rendering::Renderer* renderer);

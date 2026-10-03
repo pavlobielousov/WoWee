@@ -757,6 +757,8 @@ private:
      * @param width Texture width
      * @param height Texture height
      * @param outVariance Receives height map variance (for POM threshold)
+     * @return Generated VkTexture (RGBA8: RGB=normal, A=height)
+     */
 
     /**
      * Allocate a material descriptor set from the pool

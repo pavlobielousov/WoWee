@@ -470,7 +470,7 @@ void CharacterScreen::renderDetails(game::GameHandler& gameHandler,
         const float imgX = col.x0 + (col.width() - imgW) * 0.5f;
         const ImVec2 imgA(imgX, col.y + mat);
         const ImVec2 imgB(imgX + imgW, col.y + mat + imgH);
-        ui_.image(reinterpret_cast<ImTextureID>(preview_->getTextureId()), imgA, imgB);
+        ui_.image(preview_->getTextureId().imguiId(), imgA, imgB);
         if (ui_.hover(imgA, imgB) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             preview_->rotate(ImGui::GetIO().MouseDelta.x * 0.2f);
         }

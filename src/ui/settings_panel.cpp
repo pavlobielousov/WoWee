@@ -33,7 +33,6 @@
 // the weather, and the sampler the texture filtering level sets.
 #include "rendering/m2_renderer.hpp"
 #include "rendering/weather.hpp"
-#include "rendering/vk_context.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/character_renderer.hpp"
 #include "game/zone_manager.hpp"
@@ -1270,10 +1269,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
         // Levels rather than a sample count, each step doubling: 0 is off
         // and 4 is the 16x every desktop card stops at.
         if (services_.window) {
-            if (auto* ctx = services_.window->getVkContext()) {
-                const int level = std::clamp(pendingTextureFiltering, 0, 4);
-                ctx->setAnisotropyLimit(static_cast<float>(std::min(1 << level, 16)));
-            }
+            const int level = std::clamp(pendingTextureFiltering, 0, 4);
+            services_.window->setAnisotropyLimit(static_cast<float>(std::min(1 << level, 16)));
         }
     } else if (key == "framecap") {
         if (services_.window) services_.window->setFrameCap(frameCapFpsForChoice(pendingFrameCap));
@@ -1333,11 +1330,8 @@ void SettingsPanel::applySettingSideEffects(const std::string& key) {
             // dropdown sat on a mode the client was not using and reads as a
             // setting that does nothing. The same is true of any device whose
             // ceiling is below the four this offers.
-            const VkSampleCountFlagBits want = msaaSamplesForChoice(pendingAntiAliasing);
-            VkSampleCountFlagBits allowed = want;
-            if (auto* ctx = renderer->getVkContext()) {
-                allowed = std::min(want, ctx->getMaxUsableSampleCount());
-            }
+            const int want = msaaSamplesForChoice(pendingAntiAliasing);
+            const int allowed = std::min(want, renderer->getMaxMsaaSamples());
             if (allowed != want) {
                 const int granted = msaaChoiceForSamples(allowed);
                 LOG_WARNING("Anti-aliasing ", static_cast<int>(want),

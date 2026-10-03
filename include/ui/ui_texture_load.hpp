@@ -22,7 +22,7 @@
 #include <string>
 #include <unordered_map>
 
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 
 namespace wowee::core {
 class Window;
@@ -45,9 +45,9 @@ enum class UiTextureLoad {
 
 /// Decode `path` as a BLP and upload it as a UI texture.
 ///
-/// Returns VK_NULL_HANDLE on any failure, with `why` set when it is given.
+/// Returns rendering::kNoUiTexture on any failure, with `why` set when it is given.
 /// Callers own the caching: this does none.
-VkDescriptorSet uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
+rendering::UiTexture uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
                                        const std::string& path,
                                        core::Window* window,
                                        UiTextureLoad* why = nullptr);
@@ -61,10 +61,10 @@ VkDescriptorSet uploadUiTextureFromBlp(pipeline::AssetManager* assetManager,
 /// for again every frame the panel is open. Deferring and failing look alike
 /// at the call site and must not be cached alike; that distinction is the
 /// reason this is one function rather than two copies of four branches.
-VkDescriptorSet cachedIconTexture(
+rendering::UiTexture cachedIconTexture(
     uint32_t iconId, pipeline::AssetManager* assetManager, core::Window* window,
     const std::unordered_map<uint32_t, std::string>& paths,
-    std::unordered_map<uint32_t, VkDescriptorSet>& cache);
+    std::unordered_map<uint32_t, rendering::UiTexture>& cache);
 
 /// One item icon, by its ItemDisplayInfo id.
 ///
@@ -73,7 +73,7 @@ VkDescriptorSet cachedIconTexture(
 /// talent ones above. The cache is shared by everything that draws an item -
 /// bags, the action bar, tooltips, dialogs - because they draw the same items
 /// and there is no reason for each to upload its own copy.
-VkDescriptorSet itemIconTexture(uint32_t displayInfoId,
+rendering::UiTexture itemIconTexture(uint32_t displayInfoId,
                                 pipeline::AssetManager* assetManager,
                                 core::Window* window);
 

@@ -3,7 +3,7 @@
 #include "game/inventory.hpp"
 #include "game/character.hpp"
 #include "game/world_packets.hpp"
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 #include <imgui.h>
 #include <algorithm>
 #include <array>
@@ -73,7 +73,7 @@ private:
 
     // Item icon cache: displayInfoId -> GL texture
 public:
-    VkDescriptorSet getItemIcon(uint32_t displayInfoId);
+    rendering::UiTexture getItemIcon(uint32_t displayInfoId);
     void renderItemTooltip(const game::ItemQueryResponseData& info, const game::Inventory* inventory = nullptr, uint64_t itemGuid = 0);
     void renderItemTooltip(const game::ItemDef& item, const game::Inventory* inventory = nullptr, uint64_t itemGuid = 0);
 private:
@@ -104,8 +104,8 @@ private:
     // ignored on that frame so the right-click that used the item doesn't cancel it.
     int itemTargetArmedFrame_ = -1;
     /// The targeting cursor's own art. See castCursorTexture().
-    VkDescriptorSet castCursorTexture_ = VK_NULL_HANDLE;
-    VkDescriptorSet castCursorTexture();
+    rendering::UiTexture castCursorTexture_ = rendering::kNoUiTexture;
+    rendering::UiTexture castCursorTexture();
 
     // Click-and-hold pickup tracking
     static constexpr float kPickupHoldThreshold = 0.10f; // seconds

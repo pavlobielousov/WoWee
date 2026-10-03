@@ -33,7 +33,6 @@
 #include "rendering/renderer_spell_visuals.hpp"
 #include "rendering/renderer_transport_targets.hpp"
 #include "rendering/loot_sparkles.hpp"
-#include "rendering/vk_context.hpp"
 #include "audio/npc_voice_manager.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
@@ -94,7 +93,6 @@
 #include "pipeline/spell_icon_paths.hpp"
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
 #include <cstdlib>
 #include <climits>
 #include <algorithm>
@@ -585,9 +583,7 @@ bool Application::initialize() {
             if (auto* m2 = renderer->getM2Renderer()) m2->setGroundDetailDistance(yards);
         };
         luaSvc.setAnisotropyLimit = [this](float limit) {
-            if (auto* window = this->window.get()) {
-                if (auto* ctx = window->getVkContext()) ctx->setAnisotropyLimit(limit);
-            }
+            if (auto* window = this->window.get()) window->setAnisotropyLimit(limit);
         };
         luaSvc.setEnvironmentDetail = [this](float detail) {
             if (!renderer) return;
@@ -862,7 +858,7 @@ bool Application::initialize() {
         // The widget renderer needs the asset manager for Interface\ art and the
         // device to upload it; both exist by now.
         widgetRenderer_.initialize(assetManager.get(),
-                                   window ? window->getVkContext() : nullptr);
+                                   window ? window->getUiTextureService() : nullptr);
         if (addonManager_->initialize(gameHandler.get(), luaSvc)) {
             // FrameXML and the AddOns folder are loose directories on disk, not
             // assets reached through the manifest, and they belong to the
@@ -1517,19 +1513,10 @@ void Application::run() {
             // same thread as the loop, so the teardown happens before the
             // window is gone rather than after.
             if (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
-                if (window && window->getVkContext()) {
-                    window->getVkContext()->releaseSurface();
-                }
+                if (window) window->releaseSurface();
             } else if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND) {
-                if (window && window->getVkContext()) {
-                    // Pixels: a surface is built at the drawable size, which
-                    // is not the window size on a high density display.
-                    int w = 0, h = 0;
-                    SDL_GetWindowSizeInPixels(window->getSDLWindow(), &w, &h);
-                    if (!window->getVkContext()->restoreSurface(
-                            window->getSDLWindow(), w, h)) {
-                        LOG_ERROR("Resuming without a surface; the client cannot draw");
-                    }
+                if (window && !window->restoreSurface()) {
+                    LOG_ERROR("Resuming without a surface; the client cannot draw");
                 }
             }
 #endif
@@ -1587,9 +1574,7 @@ void Application::run() {
                     int newHeight = event.window.data2;
                     window->setSize(newWidth, newHeight);
                     // Mark swapchain dirty so it gets recreated at the correct size
-                    if (window->getVkContext()) {
-                        window->getVkContext()->markSwapchainDirty();
-                    }
+                    window->markSwapchainDirty();
                     // Vulkan viewport set in command buffer, not globally
                     if (renderer && renderer->getCamera() && newHeight > 0) {
                         renderer->getCamera()->setAspectRatio(static_cast<float>(newWidth) / newHeight);
@@ -1893,7 +1878,7 @@ void Application::run() {
         processDeferredLogoutToLogin();
 
         // Exit gracefully on GPU device lost (unrecoverable)
-        if (renderer && renderer->getVkContext() && renderer->getVkContext()->isDeviceLost()) {
+        if (renderer && renderer->isDeviceLost()) {
             LOG_ERROR("GPU device lost - exiting application");
             window->setShouldClose(true);
         }
@@ -2066,25 +2051,9 @@ void Application::shutdown() {
         uiManager->shutdown();
     }
 
-    // What the block upload actually saved this session, rather than what the
-    // asset survey predicted it would. Reported here because it is a whole
-    // session's total and the walk decides which textures that covers.
-    //
-    // Latched because shutdown() runs twice on the way out - once from main and
-    // again from ~Application - and the counters are static, so unlike every
-    // member below they survive the first pass and would report themselves a
-    // second time.
-    static bool tallyReported = false;
-    if (const auto tally = rendering::VkTexture::blockUploadTally();
-        tally.textures > 0 && !std::exchange(tallyReported, true)) {
-        const double savedPct =
-            100.0 * (1.0 - static_cast<double>(tally.blockBytes) /
-                               static_cast<double>(tally.decodedBytes));
-        LOG_INFO("Block texture upload: ", tally.textures, " textures, ",
-                 tally.blockBytes / (1024 * 1024), " MB uploaded vs ",
-                 tally.decodedBytes / (1024 * 1024), " MB decoded (",
-                 std::lround(savedPct), "% saved)");
-    }
+    // What the block upload actually saved this session, rather than what the asset survey predicted it would.
+    // Reported here because it is a whole session's total and the walk decides which textures that covers.
+    rendering::reportBlockUploadTally();
 
     // Explicitly shut down the renderer before destroying it - this ensures
     // all sub-renderers free their VMA allocations in the correct order,
@@ -2535,9 +2504,9 @@ void Application::performLogoutToLogin() {
     spawnedAppearanceBytes_ = 0;
     spawnedFacialFeatures_ = 0;
 
-    if (renderer && renderer->getVkContext() && !renderer->getVkContext()->isDeviceLost()) {
+    if (renderer) {
         LOG_DEBUG("Waiting for GPU idle before logout scene cleanup...");
-        vkDeviceWaitIdle(renderer->getVkContext()->getDevice());
+        renderer->waitIdleUnlessLost();
     }
 
     // --- Reset all EntitySpawner state (mount, creatures, players, GOs, queues, caches) ---
@@ -5039,8 +5008,8 @@ void Application::reportStageTimes() {
     // beginFrame and endFrame dominate they say nothing about which pass the
     // GPU spent it in. One frame is enough to rank the passes, and reading a
     // window of them would mean keeping the marks alive across slots.
-    if (renderer && renderer->getVkContext()) {
-        const auto& gpu = renderer->getVkContext()->gpuTimings();
+    if (renderer) {
+        const auto& gpu = renderer->gpuTimings();
         if (!gpu.empty()) {
             double total = 0.0;
             for (const auto& [name, ms] : gpu) total += ms;
@@ -5460,15 +5429,7 @@ void Application::loadQuestMarkerModels() {
     // Quest markers are billboard sprites; the renderer's QuestMarkerRenderer handles
     // texture loading and pipeline setup during world initialization.
     // Calling initialize() here is a no-op if already done; harmless if called early.
-    if (auto* qmr = renderer->getQuestMarkerRenderer()) {
-        if (auto* vkCtx = renderer->getVkContext()) {
-            VkDescriptorSetLayout pfl = renderer->getPerFrameSetLayout();
-            if (pfl != VK_NULL_HANDLE) {
-                if (!qmr->initialize(vkCtx, pfl, assetManager.get()))
-                    LOG_WARNING("Quest marker renderer re-init failed (non-fatal)");
-            }
-        }
-    }
+    renderer->reinitQuestMarkers(assetManager.get());
 }
 
 void Application::updateLootSparkles() {

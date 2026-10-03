@@ -8,7 +8,6 @@
 #include "rendering/renderer.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/animation_controller.hpp"
-#include "rendering/vk_context.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
@@ -204,12 +203,11 @@ void EntitySpawner::processAsyncNpcCompositeResults(bool unlimited) {
     // starts and cannot interrupt one already running. The stage was measured at
     // 406-675 ms against a 2 ms budget, and the device was lost inside one of
     // these waits.
-    auto* batchCtx = renderer_ ? renderer_->getVkContext() : nullptr;
-    if (batchCtx) batchCtx->beginUploadBatch();
+    if (renderer_) renderer_->beginUploadBatch();
     struct BatchGuard {
-        rendering::VkContext* ctx;
-        ~BatchGuard() { if (ctx) ctx->endUploadBatchSync(); }
-    } batchGuard{batchCtx};
+        rendering::Renderer* renderer;
+        ~BatchGuard() { if (renderer) renderer->endUploadBatchSync(); }
+    } batchGuard{renderer_};
 
     auto* charRenderer = renderer_ ? renderer_->getCharacterRenderer() : nullptr;
     if (!charRenderer) return;
@@ -239,7 +237,7 @@ void EntitySpawner::processAsyncNpcCompositeResults(bool unlimited) {
         charRenderer->setPredecodedBLPCache(&result.predecodedTextures);
 
         // --- Apply skin to type-1 slots ---
-        rendering::VkTexture* skinTex = nullptr;
+        rendering::GpuTexture* skinTex = nullptr;
 
         if (info.hasBakedSkin) {
             // Baked skin: load from pre-decoded cache
@@ -248,7 +246,7 @@ void EntitySpawner::processAsyncNpcCompositeResults(bool unlimited) {
 
         if (info.hasComposite) {
             // Composite with face/underwear/equipment regions on top of base skin
-            rendering::VkTexture* compositeTex = nullptr;
+            rendering::GpuTexture* compositeTex = nullptr;
             if (!info.regionLayers.empty()) {
                 compositeTex = charRenderer->compositeWithRegions(info.basePath,
                     info.overlayPaths, info.regionLayers);
@@ -273,8 +271,8 @@ void EntitySpawner::processAsyncNpcCompositeResults(bool unlimited) {
 
         // --- Apply hair texture to type-6 slots ---
         if (!info.hairTexturePath.empty()) {
-            rendering::VkTexture* hairTex = charRenderer->loadTexture(info.hairTexturePath);
-            rendering::VkTexture* whTex = charRenderer->loadTexture("");
+            rendering::GpuTexture* hairTex = charRenderer->loadTexture(info.hairTexturePath);
+            rendering::GpuTexture* whTex = charRenderer->loadTexture("");
             if (hairTex && hairTex != whTex) {
                 for (uint32_t slot : info.hairTextureSlots) {
                     charRenderer->setModelTexture(info.modelId, slot, hairTex);
@@ -1307,8 +1305,7 @@ void EntitySpawner::processPendingTransportDoodads() {
     // N doodads with multiple textures each don't each block on vkQueueSubmit +
     // vkWaitForFences. Without batching, 30+ doodads × several textures = hundreds
     // of sync GPU submits → the 490ms stall that preceded the VK_ERROR_DEVICE_LOST.
-    auto* vkCtx = renderer_->getVkContext();
-    if (vkCtx) vkCtx->beginUploadBatch();
+    renderer_->beginUploadBatch();
 
     size_t budgetLeft = MAX_TRANSPORT_DOODADS_PER_FRAME;
     for (auto it = pendingTransportDoodadBatches_.begin();
@@ -1440,7 +1437,7 @@ void EntitySpawner::processPendingTransportDoodads() {
     }
 
     // Finalize the upload batch - submit all GPU copies in one shot (async, no wait).
-    if (vkCtx) vkCtx->endUploadBatch();
+    renderer_->endUploadBatch();
 }
 
 void EntitySpawner::processPendingMount() {
@@ -1606,7 +1603,7 @@ void EntitySpawner::processPendingMount() {
                     texPath = modelDir + dispData.skin3 + ".blp";
                 }
                 if (!texPath.empty()) {
-                    rendering::VkTexture* skinTex = charRenderer->loadTexture(texPath);
+                    rendering::GpuTexture* skinTex = charRenderer->loadTexture(texPath);
                     if (skinTex) {
                         charRenderer->setModelTexture(modelId, static_cast<uint32_t>(ti), skinTex);
                         LOG_INFO("  Applied skin texture slot ", ti, ": ", texPath);
@@ -1630,7 +1627,7 @@ void EntitySpawner::processPendingMount() {
                             texPath = modelDir + dispData.skin2 + ".blp";
                         }
                         if (!texPath.empty()) {
-                            rendering::VkTexture* skinTex = charRenderer->loadTexture(texPath);
+                            rendering::GpuTexture* skinTex = charRenderer->loadTexture(texPath);
                             if (skinTex) {
                                 charRenderer->setModelTexture(modelId, static_cast<uint32_t>(ti), skinTex);
                                 LOG_INFO("  Forced skin on empty hardcoded slot ", ti, ": ", texPath);
@@ -1645,7 +1642,7 @@ void EntitySpawner::processPendingMount() {
             if (replaced == 0) {
                 for (size_t ti = 0; ti < md->textures.size(); ti++) {
                     if (!md->textures[ti].filename.empty()) {
-                        rendering::VkTexture* texId = charRenderer->loadTexture(md->textures[ti].filename);
+                        rendering::GpuTexture* texId = charRenderer->loadTexture(md->textures[ti].filename);
                         if (texId) {
                             charRenderer->setModelTexture(modelId, static_cast<uint32_t>(ti), texId);
                             LOG_INFO("  Used model embedded texture slot ", ti, ": ", md->textures[ti].filename);
@@ -1668,7 +1665,7 @@ void EntitySpawner::processPendingMount() {
                         nullptr
                     };
                     for (const char** p = gryphonSkins; *p; ++p) {
-                        rendering::VkTexture* texId = charRenderer->loadTexture(*p);
+                        rendering::GpuTexture* texId = charRenderer->loadTexture(*p);
                         if (texId) {
                             charRenderer->setModelTexture(modelId, 0, texId);
                             LOG_INFO("  Forced gryphon skin fallback: ", *p);
@@ -1683,7 +1680,7 @@ void EntitySpawner::processPendingMount() {
                         nullptr
                     };
                     for (const char** p = wyvernSkins; *p; ++p) {
-                        rendering::VkTexture* texId = charRenderer->loadTexture(*p);
+                        rendering::GpuTexture* texId = charRenderer->loadTexture(*p);
                         if (texId) {
                             charRenderer->setModelTexture(modelId, 0, texId);
                             LOG_INFO("  Forced wyvern skin fallback: ", *p);

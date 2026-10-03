@@ -14,7 +14,6 @@
 #include "core/thread_budget.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
-#include "rendering/vk_context.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/terrain_manager.hpp"
@@ -722,8 +721,7 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
 
     // --- Loading screen for online mode ---
     rendering::LoadingScreen loadingScreen;
-    loadingScreen.setVkContext(window_->getVkContext());
-    loadingScreen.setSDLWindow(window_->getSDLWindow());
+    loadingScreen.attachWindow(window_);
     bool loadingScreenOk = loadingScreen.initialize();
 
     auto showProgress = [&](const char* msg, float progress) {
@@ -1210,8 +1208,8 @@ void WorldLoader::loadOnlineWorldTerrain(uint32_t mapId, float x, float y, float
     // Checked: a device already lost during the load used to pass through
     // here silently and be reported by the first frame's own submit instead,
     // which put the blame one stage too late.
-    if (renderer_ && renderer_->getVkContext()) {
-        renderer_->getVkContext()->waitIdle("world entry flush");
+    if (renderer_) {
+        renderer_->waitIdle("world entry flush");
     }
 
     if (loadingScreenOk) {

@@ -20,9 +20,26 @@ TOKEN = re.compile(r'\b(Vk[A-Z]\w*|Vma\w*|VK_\w+|vk[A-Z_]\w*|vulkan\w*)\b|vulkan
 def strip(lines, token=None):
     tok = token or TOKEN
     out, i = [], 0
+    in_block_comment = False
     while i < len(lines):
         line = lines[i]
+        # A comment is not a declaration: a Vulkan word in a /* ... */ block or a doc line must not take the
+        # declaration after it down with it (the first version deleted CharacterRenderer::loadTexture that way).
+        stripped = line.strip()
+        if in_block_comment:
+            out.append(line)
+            if '*/' in line:
+                in_block_comment = False
+            i += 1
+            continue
+        if stripped.startswith('/*'):
+            out.append(line)
+            if '*/' not in line:
+                in_block_comment = True
+            i += 1
+            continue
         code = re.sub(r'//.*', '', line)
+        code = re.sub(r'/\*.*?\*/', '', code)
         if tok.search(code) or (line.lstrip().startswith('#include') and tok.search(line)):
             # drop the whole declaration: until the braces balance and the statement ends, so a
             # dropped `struct X {` takes its body with it

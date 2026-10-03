@@ -128,6 +128,21 @@ struct M2ClassificationResult {
 /**
  * Classify an M2 model by name and geometry.
  *
+ * Pure function - no Vulkan, VkContext, or AssetManager dependencies.
+ * All results are derived solely from the model name string and tight vertex bounds.
+ *
+ * @param name         Full model path/name from the M2 header (any case)
+ * @param boundsMin    Per-vertex tight bounding-box minimum
+ * @param boundsMax    Per-vertex tight bounding-box maximum
+ * @param vertexCount  Number of mesh vertices
+ * @param emitterCount Number of particle emitters
+ */
+M2ClassificationResult classifyM2Model(
+    const std::string& name,
+    const glm::vec3&   boundsMin,
+    const glm::vec3&   boundsMax,
+    std::size_t        vertexCount,
+    std::size_t        emitterCount);
 
 // ---------------------------------------------------------------------------
 // Batch texture classification
@@ -153,6 +168,11 @@ struct M2BatchTexClassification {
 /**
  * Classify a batch texture by its lowercased path for glow/tint hinting.
  *
+ * Pure function - no Vulkan, VkContext, or AssetManager dependencies.
+ *
+ * @param lowerTexKey Lowercased, backslash-normalised texture path (may be empty)
+ */
+M2BatchTexClassification classifyBatchTexture(const std::string& lowerTexKey);
 
 // ---------------------------------------------------------------------------
 // Lightweight ambient emitter classification (name-only, no geometry needed)

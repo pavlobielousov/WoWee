@@ -568,22 +568,25 @@ collision file and by the debug dump left in `wmo_renderer.cpp`). `debugDumpGrou
 
 ## 18. Shadow headers: the Vita's view of the renderer (VITA-52, ADR-001) *(mechanism and checks done; `src/core` and `src/ui` still wait for VITA-12)*
 
-The 28 sources outside `rendering/` that talk to the renderer (and the headers they include) keep `#include "rendering/renderer.hpp"`, and so on. The Vita build puts `include/platform/vita/shadow/` **first** on the include path
+The 28 sources outside `rendering/` that talk to the renderer (and the headers they include) keep `#include "rendering/renderer.hpp"`, and so on. The Vita build puts `cmake/vita/shadow/` **first** on the include path
 (`wowee_vita_shadow` in `cmake/vita/Vita.cmake`, an INTERFACE target to link before anything else), so those includes resolve to the Vita's copies: upstream's own header with every declaration that mentions Vulkan deleted
 and everything else exactly as written. 22 headers (`renderer`, `character_renderer`, `wmo_renderer`, `m2_renderer`, `minimap`, `post_process_pipeline`, `sky_system`, `terrain_renderer`, ...) plus `vk_context.hpp`, which is **poisoned**:
 including it in a Vita build stops with `#error ... (VITA-12)`, naming the item that removes the dependency instead of failing on a missing `vulkan.h`.
 
-**The copies are generated, never edited:** `tools/vita/gen_shadow.py` writes them (the table `HEADERS` in the script lists, per header, the GPU-only types that carry no Vulkan token and must be dropped too, such as `GPUPerFrameData` or `ParticleGroupKey`);
+**The directory is `cmake/vita/shadow/`, not under `include/`, on purpose: upstream's own sweeps (`duplicate_block_check.py`, `unused_member_check.py`, run by the `sweep_guard` test) scan `include/` and `src/` and flagged the generated copies as duplicated code.** **The copies are generated, never edited:** `tools/vita/gen_shadow.py` writes them (the table `HEADERS` in the script lists, per header, the GPU-only types that carry no Vulkan token and must be dropped too, such as `GPUPerFrameData` or `ParticleGroupKey`);
 `tools/vita/gen_shadow.py --check` fails if a committed copy differs from what upstream's header produces now. **After every upstream sync: run the check, regenerate, commit.** A hand-edited copy would drift from upstream silently.
 When a source needs a method that is missing, the Vita compile names it; the fix is the Vita implementation (VITA-13/18/19/20 in `src/rendering/gl/`), not the copy.
 
 **`tools/vita/shadow_check.sh`** (about 3 minutes; Vita compiler, no Vulkan headers anywhere): (1) copies match upstream, (2) `renderer.hpp` resolves into the shadow directory and reaches no Vulkan header, `vk_context.hpp` is poisoned, (3) a sweep of `src/core` and `src/ui`
 (`SHADOW=1 OUT=build-vita/sweep-shadow tools/vita/depcheck/sweep.sh core ui`) where a source may fail **only** for a reason VITA-12 removes; anything else fails the script. It writes the worklist to `build-vita/sweep-shadow/vita12_worklist.txt`.
 
-**Where it stands (2026-10-03):** 46 of 92 files in `src/core` and `src/ui` parse with the Vita compiler against the shadow headers (19 of 28 in `core`, 27 of 64 in `ui`). The other 46 fail only on VITA-12's list:
-13 headers outside `rendering/` that include `vulkan.h` themselves (`ui/chat/chat_markup_renderer.hpp` blocks 12 sources, `core/window.hpp` 9, `ui/inventory_screen.hpp` 5, `ui/settings_panel.hpp` and `ui/ui_texture_load.hpp` 3 each, `ui/graphics_choices.hpp` 2, and
-`combat_ui`, `map_window`, `spellbook_screen`, `toast_manager`, `ui_raid_icons`, `widget_renderer`, `window_manager` 1 each), 3 sources that include `vk_context.hpp` (the three `entity_spawner*.cpp`), and 2 public signatures that carry a Vulkan type
-(`CharacterPreview::getTextureId` for `unit_portrait.cpp`, `VkTexture` for `appearance_composer.cpp`). These are exactly the files VITA-12 converts.
+**Where it stands (VITA-12 done 2026-10-03):** **27 of 28 files in `src/core` and 63 of 64 in `src/ui` parse** with the Vita compiler against the shadow headers and no Vulkan header anywhere; the two that do not are
+`src/core/window.cpp` (the desktop window, which owns the Vulkan surface; the Vita has its own implementation of `core::Window`) and `src/ui/map_window.cpp` (a second OS window with its own swapchain, desktop only). `tools/vita/shadow_check.sh` expects exactly those two
+and fails on anything else; `tools/vita/vulkan_leak_check.sh` (the item's own grep, with the same two files and two header/comment cases allowlisted with reasons) reads **0 files**. How the interface reaches the renderer now, all Vulkan-free (VITA-12, `include/rendering/`):
+`ui_texture.hpp` (`UiTexture`, a strong 64-bit id for a texture ImGui can draw, and `IUiTextureService`: upload, generation, upload batches; `core::Window::getUiTextureService()`), `imgui_backend.hpp` (`IImGuiBackend`: init, new frame, shutdown;
+`core::Window::getImGuiBackend()`), `gpu_texture.hpp` (`GpuTexture`, an alias of `VkTexture` on the Vulkan renderer), and plain methods on `Renderer` and `Window` for what the shell did through the Vulkan context (`isDeviceLost`, `waitIdle`, `setMsaaSamples(int)`,
+`getMaxMsaaSamples`, `beginUploadBatch`, `releaseSurface`, `restoreSurface`, `markSwapchainDirty`, `setAnisotropyLimit`, ...). The Vulkan implementations are `vk_ui_texture_service.hpp/.cpp`, `vk_imgui_backend.hpp/.cpp` (with `toUiTexture`/`toDescriptorSet`, round-trip tested in `tests/test_ui_texture.cpp`).
+The Vita implements the same interfaces over vitaGL (VITA-13 and on). Two traps found on the way, both in `gen_shadow.py`'s stripper and fixed: a Vulkan word in a block comment must not delete the declaration after it, and GPU-only types (`AllocatedImage`) have to be listed per header.
 
 ## 19. GlProbe: vitaGL, DXT, FBO scaling and ImGui (VITA-13) *(measured on a real Vita Slim; the emulator cannot check pixels; raw logs in `docs/vita/measurements/`)*
 

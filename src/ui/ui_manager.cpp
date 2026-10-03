@@ -15,10 +15,9 @@
 #include "core/logger.hpp"
 #include "auth/auth_handler.hpp"
 #include "game/game_handler.hpp"
-#include "rendering/vk_context.hpp"
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
-#include <imgui_impl_vulkan.h>
+#include "rendering/imgui_backend.hpp"
 
 namespace wowee {
 namespace ui {
@@ -93,9 +92,9 @@ bool UIManager::initialize(core::Window* win) {
     window = win;
     LOG_INFO("Initializing UI manager");
 
-    auto* vkCtx = window->getVkContext();
-    if (!vkCtx) {
-        LOG_ERROR("No Vulkan context available for ImGui initialization");
+    auto* backend = window->getImGuiBackend();
+    if (!backend) {
+        LOG_ERROR("No renderer context available for ImGui initialization");
         return false;
     }
 
@@ -119,34 +118,15 @@ bool UIManager::initialize(core::Window* win) {
         LOG_INFO("Interface scaled by ", scale, " for this display");
     }
 
-    // Initialize ImGui for SDL2 + Vulkan
-    ImGui_ImplSDL3_InitForVulkan(window->getSDLWindow());
-
-    ImGui_ImplVulkan_InitInfo initInfo{};
-    initInfo.ApiVersion = VK_API_VERSION_1_1;
-    initInfo.Instance = vkCtx->getInstance();
-    initInfo.PhysicalDevice = vkCtx->getPhysicalDevice();
-    initInfo.Device = vkCtx->getDevice();
-    initInfo.QueueFamily = vkCtx->getGraphicsQueueFamily();
-    initInfo.Queue = vkCtx->getGraphicsQueue();
-    initInfo.DescriptorPool = vkCtx->getImGuiDescriptorPool();
-    initInfo.MinImageCount = 2;
-    initInfo.ImageCount = vkCtx->getSwapchainImageCount();
-    // The UI renders in the overlay pass, which is single-sampled on purpose:
-    // ImGui draws axis-aligned rects and pre-antialiased glyphs, so MSAA buys
-    // almost nothing there and costs fill rate at the sample count the scene uses.
-    initInfo.PipelineInfoMain.RenderPass = vkCtx->getOverlayRenderPass();
-    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    initInfo.CheckVkResultFn = [](VkResult err) {
-        if (err != VK_SUCCESS)
-            LOG_ERROR("ImGui Vulkan error: ", static_cast<int>(err));
-    };
-
-    ImGui_ImplVulkan_Init(&initInfo);
+    // The platform and renderer halves of ImGui, for whatever renderer this window has.
+    if (!backend->init(window->getSDLWindow())) {
+        LOG_ERROR("The ImGui backend would not start");
+        return false;
+    }
 
     imguiInitialized = true;
 
-    LOG_INFO("UI manager initialized successfully (Vulkan)");
+    LOG_INFO("UI manager initialized successfully");
     return true;
 }
 
@@ -347,13 +327,9 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
 
 void UIManager::shutdown() {
     if (imguiInitialized) {
-        auto* vkCtx = window ? window->getVkContext() : nullptr;
-        if (vkCtx) {
-            vkDeviceWaitIdle(vkCtx->getDevice());
+        if (auto* backend = window ? window->getImGuiBackend() : nullptr) {
+            backend->shutdown();
         }
-
-        ImGui_ImplVulkan_Shutdown();
-        ImGui_ImplSDL3_Shutdown();
         ImGui::DestroyContext();
         imguiInitialized = false;
     }
@@ -364,8 +340,7 @@ void UIManager::update([[maybe_unused]] float deltaTime) {
     if (!imguiInitialized) return;
 
     // Start ImGui frame
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplSDL3_NewFrame();
+    if (auto* backend = window ? window->getImGuiBackend() : nullptr) backend->newFrame();
     ImGui::NewFrame();
 }
 

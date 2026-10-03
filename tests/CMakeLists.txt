@@ -259,6 +259,13 @@ wowee_add_test(test_shared_rules
             ${CMAKE_SOURCE_DIR}/src/ui/settings_schema.cpp
             ${TEST_COMMON_SOURCES})
 
+# ── test_ui_texture ─────────────────────────────────────────
+# UiTexture, the opaque id the interface holds for a texture ImGui can draw (VITA-12), and its round trip to and
+# from the Vulkan descriptor set it stands for. Header-only; needs the Vulkan headers for the handle type.
+wowee_add_test(test_ui_texture
+    SOURCES test_ui_texture.cpp
+            ${TEST_COMMON_SOURCES})
+
 # ── test_geoset_rules ────────────────────────────────────────
 # Choosing a geoset when the model lacks the one asked for. Pure header, so the
 # test needs nothing but Catch.
