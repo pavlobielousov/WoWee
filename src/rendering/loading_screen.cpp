@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL_vulkan.h>
 #include "rendering/vk_context.hpp"
+#include "core/window.hpp"
 #include "core/logger.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -17,6 +18,11 @@
 
 namespace wowee {
 namespace rendering {
+
+void LoadingScreen::attachWindow(core::Window* window) {
+    setVkContext(window ? window->getVkContext() : nullptr);
+    setSDLWindow(window ? window->getSDLWindow() : nullptr);
+}
 
 LoadingScreen::LoadingScreen() {
     imagePaths.emplace_back("assets/krayonload.png");

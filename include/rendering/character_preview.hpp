@@ -3,7 +3,7 @@
 #include "game/character.hpp"
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
-#include "rendering/vk_ui_texture_service.hpp"
+#include "rendering/ui_texture.hpp"
 #include <vk_mem_alloc.h>
 #include <memory>
 #include <cstdint>
@@ -93,7 +93,7 @@ public:
 
     // Returns the ImGui texture handle. Returns VK_NULL_HANDLE until the first
     // compositePass has run (image is in UNDEFINED layout before that).
-    [[nodiscard]] UiTexture getTextureId() const { return compositeRendered_ ? toUiTexture(imguiTextureId_) : UiTexture{}; }
+    [[nodiscard]] UiTexture getTextureId() const;
     [[nodiscard]] int getWidth() const { return fboWidth_; }
     [[nodiscard]] int getHeight() const { return fboHeight_; }
 

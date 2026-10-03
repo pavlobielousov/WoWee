@@ -11,7 +11,6 @@
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/animation_controller.hpp"
-#include "rendering/vk_context.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/wmo_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
@@ -1596,8 +1595,8 @@ if (const auto* md = charRenderer->getModelData(modelId)) {
         // Apply cape texture override so the cloak mesh shows the actual cape
         // instead of the default body texture.
         if (hasRenderableCape && !capeTexturePath.empty()) {
-            rendering::VkTexture* capeTex = charRenderer->loadTexture(capeTexturePath);
-            const rendering::VkTexture* whiteTex = charRenderer->loadTexture("");
+            rendering::GpuTexture* capeTex = charRenderer->loadTexture(capeTexturePath);
+            const rendering::GpuTexture* whiteTex = charRenderer->loadTexture("");
             if (capeTex && capeTex != whiteTex) {
                 charRenderer->setGroupTextureOverride(instanceId, 15, capeTex);
                 if (const auto* md2 = charRenderer->getModelData(modelId)) {
@@ -1632,11 +1631,11 @@ void EntitySpawner::applyHumanoidInstanceOverrides(uint32_t instanceId, uint32_t
             const auto* md = charRenderer->getModelData(modelId);
             if (md) {
                     // Look up hair texture (section 3) via cache
-                    rendering::VkTexture* whiteTex = charRenderer->loadTexture("");
+                    rendering::GpuTexture* whiteTex = charRenderer->loadTexture("");
                     std::string hairPath = lookupCharSection(
                         extra.raceId, extra.sexId, 3, extra.hairStyleId, extra.hairColorId, 0);
                     if (!hairPath.empty()) {
-                        rendering::VkTexture* hairTex = charRenderer->loadTexture(hairPath);
+                        rendering::GpuTexture* hairTex = charRenderer->loadTexture(hairPath);
                         if (hairTex && hairTex != whiteTex) {
                             for (size_t ti = 0; ti < md->textures.size(); ti++) {
                                 if (md->textures[ti].type == 6) {
@@ -1668,7 +1667,7 @@ void EntitySpawner::applyHumanoidInstanceOverrides(uint32_t instanceId, uint32_t
                             extraPath = lookupCharSection(
                                 extra.raceId, extra.sexId, 0, 0, extra.skinId, 0);
                         }
-                        rendering::VkTexture* extraTex =
+                        rendering::GpuTexture* extraTex =
                             extraPath.empty() ? nullptr : charRenderer->loadTexture(extraPath);
                         if (extraTex && extraTex != whiteTex) {
                             for (size_t ti = 0; ti < md->textures.size(); ti++) {
@@ -1720,7 +1719,7 @@ void EntitySpawner::applyHumanoidInstanceOverrides(uint32_t instanceId, uint32_t
                         std::string skinPath = lookupCharSection(
                             extra.raceId, extra.sexId, 0, 0, extra.skinId, 0);
                         if (!skinPath.empty()) {
-                            rendering::VkTexture* skinTex = charRenderer->loadTexture(skinPath);
+                            rendering::GpuTexture* skinTex = charRenderer->loadTexture(skinPath);
                             if (skinTex) {
                                 for (size_t ti = 0; ti < md->textures.size(); ti++) {
                                     uint32_t tt = md->textures[ti].type;
@@ -2085,7 +2084,7 @@ void EntitySpawner::applyCreatureDisplayTextures(uint32_t displayId, uint32_t mo
             }
 
             if (!skinPath.empty()) {
-                rendering::VkTexture* skinTex = charRenderer->loadTexture(skinPath);
+                rendering::GpuTexture* skinTex = charRenderer->loadTexture(skinPath);
                 if (skinTex) {
                     charRenderer->setModelTexture(modelId, static_cast<uint32_t>(ti), skinTex);
                     LOG_DEBUG("Applied creature skin texture: ", skinPath, " to slot ", ti);

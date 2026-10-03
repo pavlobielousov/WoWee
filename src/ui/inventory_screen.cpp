@@ -12,7 +12,6 @@
 #include "game/game_handler.hpp"
 #include "core/application.hpp"
 #include "core/world_loader.hpp"
-#include "rendering/vk_context.hpp"
 #include "core/input.hpp"
 #include "rendering/character_preview.hpp"
 #include "rendering/character_renderer.hpp"

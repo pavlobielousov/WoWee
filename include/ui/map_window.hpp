@@ -19,13 +19,17 @@
 
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
-#include <vulkan/vulkan.h>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 
 struct ImGuiContext;
+
+// A Vulkan command buffer, named without the Vulkan headers: this window is desktop only (a second OS window with its
+// own swapchain), and map_window.cpp has the real ones. The same type vulkan.h declares, so both can be in one file.
+struct VkCommandBuffer_T;
+using VkCommandBuffer = VkCommandBuffer_T*;
 
 namespace wowee {
 namespace rendering {

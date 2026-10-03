@@ -3,7 +3,6 @@
 
 #include "core/application.hpp"
 #include "pipeline/asset_manager.hpp"
-#include "rendering/vk_context.hpp"
 
 #include <array>
 #include <string>

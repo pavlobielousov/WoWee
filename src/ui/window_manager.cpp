@@ -19,7 +19,6 @@
 #include "core/logger.hpp"
 #include "rendering/renderer.hpp"
 #include "rendering/character_preview.hpp"
-#include "rendering/vk_context.hpp"
 #include "core/window.hpp"
 #include "game/game_handler.hpp"
 #include "game/auction_filters.hpp"

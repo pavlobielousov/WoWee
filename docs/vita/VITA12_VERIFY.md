@@ -61,3 +61,21 @@ Each PR in this series lists which of these it can affect, so you can skip the r
 
 For each PR: "screens OK" or a short list of what looked wrong (a screenshot helps), and the output of `compare_frame_profile.py` for the
 scenes you ran.
+
+## 3. Which change affects which screen (the VITA-12 PR)
+
+So you can look first where it matters. Everything below is **meant to look and behave exactly as before**.
+
+| Change | Where it shows |
+|---|---|
+| Icons and portraits are `UiTexture` ids instead of descriptor sets (same numbers, same ImGui calls) | every icon: action bars, bags, spellbook, talents, tooltips, chat links, raid target marks, cursor, buffs, cast bar, unit portraits, character select and create previews |
+| The login background is uploaded through the shared upload instead of 150 lines of its own (**a real code change**) | the login screen's background picture; leave the app on it for a minute, resize, minimise and restore; quit cleanly |
+| The widget renderer talks to a small upload service instead of the Vulkan context | everything drawn from the game's own interface files (FrameXML-style panels), their textures and their loading batches |
+| ImGui's renderer backend is started, fed and stopped through an interface (same calls, same order) | **any UI at all**; start the client, quit it, and log out and in again; a crash on exit would be here |
+| `Window`/`Renderer` methods replace direct context calls in the shell | minimise and restore the window (surface release/restore on phones is the same code), resize (swapchain rebuild), entering the world (the wait before the load screen ends), logging out |
+| Antialiasing and texture filtering settings go through `Renderer`/`Window` | the settings panel: change antialiasing (note the "this GPU offers" clamp message on a card with a lower maximum), change texture filtering |
+| Upload batching in the entity spawner goes through `Renderer` | NPCs and players appearing in a busy area (no stalls, same skins, cloaks, hair) |
+| `GpuTexture` is an alias of `VkTexture`; one dead accessor removed | nothing visible; compile-time only |
+
+The PR description lists, per file, what changed and why.
+

@@ -8,7 +8,6 @@
 #include "ui/ui_colors.hpp"
 #include "ui/ui_helpers.hpp"
 #include "ui/nameplate_stacking.hpp"
-#include "rendering/vk_context.hpp"
 #include "core/application.hpp"
 #include "core/appearance_composer.hpp"
 #include "ui/map_window.hpp"
@@ -444,7 +443,7 @@ void GameScreen::updateCharacterTextures(game::Inventory& inventory) {
                                        (ch->gender == game::Gender::NONBINARY && ch->useFemaleModel);
                         }
                     }
-                    const rendering::VkTexture* whiteTex = charRenderer->loadTexture("");
+                    const rendering::GpuTexture* whiteTex = charRenderer->loadTexture("");
                     for (const auto& capePath : pipeline::capeTextureCandidates(capeName, isFemale)) {
                         auto* capeTex = charRenderer->loadTexture(capePath);
                         if (capeTex == nullptr || capeTex == whiteTex) continue;

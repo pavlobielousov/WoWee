@@ -1,4 +1,5 @@
 #include "rendering/vk_texture.hpp"
+#include <utility>
 #include "rendering/vk_context.hpp"
 #include "core/logger.hpp"
 #include <atomic>
@@ -259,6 +260,22 @@ std::atomic<uint64_t> g_blockUploadTextures{0};
 std::atomic<uint64_t> g_blockUploadBytes{0};
 std::atomic<uint64_t> g_blockUploadDecodedBytes{0};
 } // namespace
+
+void reportBlockUploadTally() {
+    // Latched because Application::shutdown() runs twice on the way out - once from main and again from
+    // ~Application - and the counters are static, so they would otherwise report themselves a second time.
+    static bool tallyReported = false;
+    if (const auto tally = VkTexture::blockUploadTally();
+        tally.textures > 0 && !std::exchange(tallyReported, true)) {
+        const double savedPct =
+            100.0 * (1.0 - static_cast<double>(tally.blockBytes) /
+                               static_cast<double>(tally.decodedBytes));
+        LOG_INFO("Block texture upload: ", tally.textures, " textures, ",
+                 tally.blockBytes / (1024 * 1024), " MB uploaded vs ",
+                 tally.decodedBytes / (1024 * 1024), " MB decoded (",
+                 std::lround(savedPct), "% saved)");
+    }
+}
 
 VkTexture::BlockUploadTally VkTexture::blockUploadTally() {
     return {.textures = g_blockUploadTextures.load(std::memory_order_relaxed),
