@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <chrono>
+#include "rendering/query_timer.hpp"
 
 namespace wowee {
 namespace rendering {
@@ -96,28 +97,7 @@ struct ShadowParamsUBO {
     float foliageMotionDamp;
 };
 
-// Timer utility for performance profiling queries.
-// Uses atomics because floor-height queries are dispatched on async threads
-// from CameraController while the main thread may read the counters.
-struct QueryTimer {
-    std::atomic<double>* totalMs = nullptr;
-    std::atomic<uint32_t>* callCount = nullptr;
-    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-    QueryTimer(std::atomic<double>* total, std::atomic<uint32_t>* calls)
-        : totalMs(total), callCount(calls) {}
-    ~QueryTimer() {
-        if (callCount) {
-            callCount->fetch_add(1, std::memory_order_relaxed);
-        }
-        if (totalMs) {
-            auto end = std::chrono::steady_clock::now();
-            double ms = std::chrono::duration<double, std::milli>(end - start).count();
-            // Relaxed is fine for diagnostics - exact ordering doesn't matter.
-            double old = totalMs->load(std::memory_order_relaxed);
-            while (!totalMs->compare_exchange_weak(old, old + ms, std::memory_order_relaxed)) {}
-        }
-    }
-};
+// QueryTimer moved to rendering/query_timer.hpp (no Vulkan; VITA-51), included above.
 
 } // namespace rendering
 } // namespace wowee
