@@ -85,3 +85,10 @@ Cut: shadows, Hi-Z and all compute culling, FSR/FSR2/FSR3, post-process chain (a
 ## How the numbers were made
 
 Counts come from three throw-away scripts over the tree at `origin/vita` on 2026-10-03: calls on `Renderer` pointers (`getRenderer()->x`, `renderer->x`, `renderer_->x` and the chained `getX()->y`) outside `src/rendering` and `include/rendering`; Vulkan mentions per rendering header and source (regex on `vulkan`, `VkContext`, `vk_`, `Vk*`, `Vma*`); Vulkan types and includes in `ui/`, `core/`, `pipeline/`, `game/`. "Vulkan-free" means no such mention in the file, not that the whole transitive include set was checked; VITA-13 does that with the real compiler. The scripts are not kept in the repo; the method is above.
+
+## Update 2026-10-03: what the device measured (VITA-13 GlProbe, `docs/vita/DEV_SETUP.md` section 19)
+- Open question 1 (translator on the terrain and character shaders): a two-layer terrain shader and an M2 alpha-test shader translate and draw correctly, **but each program costs about 330 to 365 ms to compile (165 to 182 ms with a shader cache)**, so **decision 5 needs a refinement, not a reversal**: compile at run time only behind a loading screen, **cap the number of permutations**, and evaluate shipping the translator's own output as GXP binaries (`vglGetShaderBinary` to dump, `glShaderBinary` to load; untested, VITA-14). Fixed-function needs no compiler at all and ImGui can use it (UI via a fixed-function renderer works).
+- Open question 2 (draw-call cost): about 2.2 microseconds per draw, 3 to 4 with state changes, 0.3 per quad batched (fixed-function path, 444 MHz). Budget about 3 ms per 1000 draws.
+- Open question 4 (640x368 scene plus native UI): the FBO and the scaled blit work and are correct; their cost in a real scene is not measured.
+- DXT1/3/5 and DXT mips work as the decision assumed; one vitaGL state quirk is recorded in the DEV_SETUP section.
+

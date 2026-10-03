@@ -16,12 +16,15 @@
 // A FAIL is a finding, not necessarily a bug (see the DepCheck convention).
 #include <psp2/io/fcntl.h>
 #include <psp2/kernel/clib.h>
+#include <psp2/kernel/threadmgr.h>
+#include <psp2/power.h>
 #include <psp2/io/stat.h>
 #include <psp2/kernel/processmgr.h>
 
 #include <vitaGL.h>
 
 #include "imgui.h"
+#include "imgui_impl_opengl3.h"
 
 // EXT_texture_compression_s3tc, spelled out: vitaGL's headers do not pull in GLES2/gl2ext.h.
 #ifndef GL_COMPRESSED_RGBA_S3TC_DXT1_EXT
@@ -281,6 +284,302 @@ static void test_dxt_variants() {
     upload_and_probe_dxt("DXT5 8x8 GL_MIRRORED_REPEAT", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 8, true, GL_MIRRORED_REPEAT);
 }
 
+// ---- draw-call cost (mask 64, ADR-001 open question b) ------------------------------------------------------
+// N small textured quads per frame, five ways. "submit" is the CPU time spent issuing the draws (what a renderer
+// has to budget per frame at the CPU clock set in main()); "frame" includes the swap and the vsync wait, so it
+// saturates at 16.7 ms and grows only when the CPU or GPU cannot keep up.
+//   A: N glDrawArrays from one big vertex array, no state change   B: + glBindTexture between two textures
+//   C: + glColor4f each draw (FFP state)                          D: ONE glDrawArrays for all N quads (batched)
+//   E: N draws, each re-pointing glVertexPointer/glTexCoordPointer (a different vertex buffer per object)
+static void bench_variant(const char* label, int n, char mode, GLuint texA, GLuint texB, const GLfloat* verts,
+                          const GLfloat* uvs, const GLfloat* batchedVerts, const GLfloat* batchedUvs) {
+    const int frames = 40;
+    uint64_t submitUs = 0, totalUs = 0;
+    for (int f = 0; f < frames; f++) {
+        const uint64_t t0 = sceKernelGetProcessTimeWide();
+        glClearColor(0.1f, 0.1f, 0.1f, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        set_ortho(960, 544);
+        glEnable(GL_TEXTURE_2D);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        const uint64_t s0 = sceKernelGetProcessTimeWide();
+        if (mode == 'D') {
+            glBindTexture(GL_TEXTURE_2D, texA);
+            glVertexPointer(2, GL_FLOAT, 0, batchedVerts);
+            glTexCoordPointer(2, GL_FLOAT, 0, batchedUvs);
+            glDrawArrays(GL_TRIANGLES, 0, 6 * n);
+        } else {
+            glVertexPointer(2, GL_FLOAT, 0, verts);
+            glTexCoordPointer(2, GL_FLOAT, 0, uvs);
+            glBindTexture(GL_TEXTURE_2D, texA);
+            for (int i = 0; i < n; i++) {
+                if (mode == 'B' || mode == 'C') glBindTexture(GL_TEXTURE_2D, (i & 1) ? texB : texA);
+                if (mode == 'C') glColor4f((i & 2) ? 1.0f : 0.8f, 1, 1, 1);
+                if (mode == 'E') {
+                    glVertexPointer(2, GL_FLOAT, 0, verts + i * 8);
+                    glTexCoordPointer(2, GL_FLOAT, 0, uvs + i * 8);
+                    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                } else {
+                    glDrawArrays(GL_TRIANGLE_STRIP, i * 4, 4);
+                }
+            }
+        }
+        const uint64_t s1 = sceKernelGetProcessTimeWide();
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        glDisableClientState(GL_VERTEX_ARRAY);
+        glDisable(GL_TEXTURE_2D);
+        vglSwapBuffers(GL_FALSE);
+        const uint64_t t1 = sceKernelGetProcessTimeWide();
+        if (f >= 5) {  // the first frames include one-off setup
+            submitUs += s1 - s0;
+            totalUs += t1 - t0;
+        }
+    }
+    const double n2 = frames - 5;
+    log_line("INFO bench %-30s n=%4d submit %6.2f ms (%5.1f us/draw) frame %6.2f ms", label, n,
+             submitUs / 1000.0 / n2, submitUs / n2 / n, totalUs / 1000.0 / n2);
+}
+
+static void test_draw_cost() {
+    static const int kMax = 2000;
+    GLfloat* verts = static_cast<GLfloat*>(malloc(sizeof(GLfloat) * 8 * kMax));
+    GLfloat* uvs = static_cast<GLfloat*>(malloc(sizeof(GLfloat) * 8 * kMax));
+    GLfloat* bverts = static_cast<GLfloat*>(malloc(sizeof(GLfloat) * 12 * kMax));
+    GLfloat* buvs = static_cast<GLfloat*>(malloc(sizeof(GLfloat) * 12 * kMax));
+    for (int i = 0; i < kMax; i++) {
+        const float x = static_cast<float>((i % 150) * 6), y = static_cast<float>(((i / 150) * 6) % 520);
+        const GLfloat q[8] = {x, y, x + 5, y, x, y + 5, x + 5, y + 5};
+        const GLfloat t[8] = {0, 0, 1, 0, 0, 1, 1, 1};
+        memcpy(verts + i * 8, q, sizeof q);
+        memcpy(uvs + i * 8, t, sizeof t);
+        const int tri[6] = {0, 1, 2, 2, 1, 3};  // the strip as two triangles
+        for (int k = 0; k < 6; k++) {
+            bverts[i * 12 + k * 2] = q[tri[k] * 2];
+            bverts[i * 12 + k * 2 + 1] = q[tri[k] * 2 + 1];
+            buvs[i * 12 + k * 2] = t[tri[k] * 2];
+            buvs[i * 12 + k * 2 + 1] = t[tri[k] * 2 + 1];
+        }
+    }
+    GLuint tex[2] = {0, 0};
+    glGenTextures(2, tex);
+    for (int k = 0; k < 2; k++) {
+        uint8_t px[8 * 8 * 4];
+        for (int i = 0; i < 64; i++) {
+            px[i * 4] = k ? 255 : 80;
+            px[i * 4 + 1] = 160;
+            px[i * 4 + 2] = k ? 80 : 255;
+            px[i * 4 + 3] = 255;
+        }
+        glBindTexture(GL_TEXTURE_2D, tex[k]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    }
+    log_line("INFO bench ARM clock %d MHz, GPU %d MHz, bus %d MHz", scePowerGetArmClockFrequency(),
+             scePowerGetGpuClockFrequency(), scePowerGetBusClockFrequency());
+    static const int counts[] = {100, 500, 1000, 2000};
+    for (int n : counts) {
+        bench_variant("A draws only", n, 'A', tex[0], tex[1], verts, uvs, bverts, buvs);
+        bench_variant("B + texture switch", n, 'B', tex[0], tex[1], verts, uvs, bverts, buvs);
+        bench_variant("C + texture switch + colour", n, 'C', tex[0], tex[1], verts, uvs, bverts, buvs);
+        bench_variant("E + vertex pointers each draw", n, 'E', tex[0], tex[1], verts, uvs, bverts, buvs);
+        bench_variant("D one batched draw", n, 'D', tex[0], tex[1], verts, uvs, bverts, buvs);
+    }
+    glDeleteTextures(2, tex);
+    free(verts);
+    free(uvs);
+    free(bverts);
+    free(buvs);
+}
+
+// vitaGL has no glDetachShader, and the stock imgui_impl_opengl3 calls it (twice, after linking its program). Detaching
+// only matters for freeing the shader objects early; the backend deletes them right after, so a no-op is enough. A Vita
+// ImGui backend must carry this shim (VITA-13 finding).
+extern "C" void glDetachShader(GLuint, GLuint) {}
+
+// ---- the shader path (mask 128, ADR-001 open question 1, VITA-13 task e) ------------------------------------------
+// GLSL ES 1.00 compiled at run time by vitaGL's translator (vitashark + libshacccg.suprx). Times the compile and link
+// of a representative terrain shader (a base texture, a second layer blended by an alpha map, directional light, fog),
+// draws with it and reads a pixel back, then runs the STOCK imgui_impl_opengl3 (GLES2 profile) backend.
+static const char* kTerrainVS =
+    "precision highp float;\n"
+    "attribute vec3 aPos;\n"
+    "attribute vec2 aUV;\n"
+    "uniform mat4 uMVP;\n"
+    "uniform vec3 uLightDir;\n"
+    "varying vec2 vUV;\n"
+    "varying float vLight;\n"
+    "varying float vFog;\n"
+    "void main() {\n"
+    "    gl_Position = uMVP * vec4(aPos, 1.0);\n"
+    "    vUV = aUV;\n"
+    "    vLight = max(dot(vec3(0.0, 0.0, 1.0), uLightDir), 0.2);\n"
+    "    vFog = clamp(gl_Position.w / 500.0, 0.0, 1.0);\n"
+    "}\n";
+static const char* kTerrainFS =
+    "precision mediump float;\n"
+    "varying vec2 vUV;\n"
+    "varying float vLight;\n"
+    "varying float vFog;\n"
+    "uniform sampler2D uBase;\n"
+    "uniform sampler2D uLayer1;\n"
+    "uniform sampler2D uAlpha1;\n"
+    "uniform vec3 uFogColor;\n"
+    "void main() {\n"
+    "    vec4 base = texture2D(uBase, vUV * 8.0);\n"
+    "    vec4 l1 = texture2D(uLayer1, vUV * 8.0);\n"
+    "    float a = texture2D(uAlpha1, vUV).r;\n"
+    "    vec3 c = mix(base.rgb, l1.rgb, a) * vLight;\n"
+    "    c = mix(c, uFogColor, vFog);\n"
+    "    gl_FragColor = vec4(c, 1.0);\n"
+    "}\n";
+static const char* kM2VS =
+    "precision highp float;\n"
+    "attribute vec3 aPos;\n"
+    "attribute vec2 aUV;\n"
+    "uniform mat4 uMVP;\n"
+    "varying vec2 vUV;\n"
+    "void main() { gl_Position = uMVP * vec4(aPos, 1.0); vUV = aUV; }\n";
+static const char* kM2FS =
+    "precision mediump float;\n"
+    "varying vec2 vUV;\n"
+    "uniform sampler2D uTex;\n"
+    "uniform vec4 uColor;\n"
+    "void main() { vec4 t = texture2D(uTex, vUV); if (t.a < 0.5) discard; gl_FragColor = t * uColor; }\n";
+
+static GLuint compile_shader(GLenum type, const char* src, double* ms, const char* label) {
+    const uint64_t t0 = sceKernelGetProcessTimeWide();
+    GLuint sh = glCreateShader(type);
+    glShaderSource(sh, 1, &src, nullptr);
+    glCompileShader(sh);
+    *ms = (sceKernelGetProcessTimeWide() - t0) / 1000.0;
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char info[200] = {0};
+        glGetShaderInfoLog(sh, sizeof info - 1, nullptr, info);
+        log_line("INFO %s compile log: %s", label, info);
+    }
+    return ok ? sh : 0;
+}
+
+static GLuint build_program(const char* name, const char* vs, const char* fs, double* total) {
+    double msV = 0, msF = 0;
+    GLuint v = compile_shader(GL_VERTEX_SHADER, vs, &msV, name);
+    GLuint f = compile_shader(GL_FRAGMENT_SHADER, fs, &msF, name);
+    if (!v || !f) { *total = msV + msF; return 0; }
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, v);
+    glAttachShader(prog, f);
+    glBindAttribLocation(prog, 0, "aPos");
+    glBindAttribLocation(prog, 1, "aUV");
+    const uint64_t t0 = sceKernelGetProcessTimeWide();
+    glLinkProgram(prog);
+    const double msL = (sceKernelGetProcessTimeWide() - t0) / 1000.0;
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    *total = msV + msF + msL;
+    log_line("INFO shader %-18s vertex %7.1f ms, fragment %7.1f ms, link %7.1f ms (total %7.1f ms)", name, msV, msF,
+             msL, *total);
+    return ok ? prog : 0;
+}
+
+static GLuint solid_texture(uint8_t r, uint8_t g, uint8_t b) {
+    uint8_t px[2 * 2 * 4];
+    for (int i = 0; i < 4; i++) { px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = 255; }
+    GLuint t = 0;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    return t;
+}
+
+static void test_shaders() {
+    char d[200];
+    double msTerrain = 0, msM2 = 0, msAgain = 0;
+    GLuint terrain = build_program("terrain (2 layers)", kTerrainVS, kTerrainFS, &msTerrain);
+    check("terrain shader compiles and links (GLSL ES 1.00, run-time translator)", terrain != 0, nullptr);
+    GLuint m2 = build_program("m2 (alpha test)", kM2VS, kM2FS, &msM2);
+    check("M2-style shader (discard, uniforms) compiles and links", m2 != 0, nullptr);
+    GLuint again = build_program("terrain (2nd time)", kTerrainVS, kTerrainFS, &msAgain);
+    snprintf(d, sizeof d, "first %.1f ms, second %.1f ms", msTerrain, msAgain);
+    check("same source compiled again", again != 0, d);
+
+    if (terrain) {
+        GLuint base = solid_texture(255, 0, 0), l1 = solid_texture(0, 0, 255), alpha = solid_texture(128, 128, 128);
+        glClearColor(0.2f, 0.2f, 0.2f, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glViewport(0, 0, 960, 544);
+        glUseProgram(terrain);
+        const GLfloat id[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        glUniformMatrix4fv(glGetUniformLocation(terrain, "uMVP"), 1, GL_FALSE, id);
+        glUniform3f(glGetUniformLocation(terrain, "uLightDir"), 0, 0, 1);
+        glUniform3f(glGetUniformLocation(terrain, "uFogColor"), 0.5f, 0.5f, 0.5f);
+        const GLuint tex[3] = {base, l1, alpha};
+        static const char* names[3] = {"uBase", "uLayer1", "uAlpha1"};
+        for (int i = 0; i < 3; i++) {
+            glActiveTexture(GL_TEXTURE0 + i);
+            glBindTexture(GL_TEXTURE_2D, tex[i]);
+            glUniform1i(glGetUniformLocation(terrain, names[i]), i);
+        }
+        const GLfloat pos[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 0};
+        const GLfloat uv[] = {0, 0, 1, 0, 0, 1, 1, 1};
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, pos);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
+        glActiveTexture(GL_TEXTURE0);
+        // base red, layer blue, alpha map 0.5, light 1, fog about 0.002: about (127, 0, 127)
+        Rgba got = read_px(480, 272, 544);
+        fmt_rgba(d, sizeof d, got, 128, 0, 128);
+        check("terrain shader draws: mix(red, blue, 0.5 alpha map) with light and fog", near_rgb(got, 128, 0, 128, 24), d);
+        glUseProgram(0);
+        glDeleteTextures(1, &base);
+        glDeleteTextures(1, &l1);
+        glDeleteTextures(1, &alpha);
+    }
+
+    // The stock GLES2 ImGui backend: it builds its own shaders at the first frame.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(960, 544);
+    io.IniFilename = nullptr;
+    ImGui::StyleColorsDark();
+    const uint64_t t0 = sceKernelGetProcessTimeWide();
+    const bool ok = ImGui_ImplOpenGL3_Init("#version 100");
+    check("stock imgui_impl_opengl3 (GLES2) initialises", ok, nullptr);
+    if (ok) {
+        glClearColor(0.2f, 0.4f, 0.2f, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        io.DeltaTime = 1.0f / 60.0f;
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(100, 100));
+        ImGui::SetNextWindowSize(ImVec2(300, 200));
+        ImGui::Begin("GlProbe ES2", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::Text("stock GLES2 backend");
+        ImGui::End();
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        log_line("INFO stock ImGui GLES2 backend: init + first frame %.1f ms (shader compile included)",
+                 (sceKernelGetProcessTimeWide() - t0) / 1000.0);
+        Rgba inside = read_px(110, 280, 544);
+        snprintf(d, sizeof d, "window body (%d,%d,%d)", inside.r, inside.g, inside.b);
+        check("stock ImGui GLES2 backend draws a window", inside.g < 60 && inside.r < 60, d);
+        ImGui_ImplOpenGL3_Shutdown();
+    }
+    ImGui::DestroyContext();
+}
+
 static void test_fbo_scale() {
     char d[160];
     const int fw = 640, fh = 368;
@@ -438,7 +737,7 @@ static void test_imgui() {
 }
 
 // ux0:data/wowee/glprobe.mask (hex) selects what runs, to bisect a crash: 1 clear read-back, 2 DXT, 4 FBO,
-// 8 ImGui, 16 frame loop, 32 DXT3/DXT5 variants (diagnostic). Missing or unreadable: 31 (everything but 32).
+// 8 ImGui, 16 frame loop, 32 DXT3/DXT5 variants (diagnostic), 64 draw-call cost, 128 shader path (run-time compile, stock GLES2 ImGui). Missing or unreadable: 31.
 static unsigned read_mask() {
     unsigned mask = 31;
     SceUID fd = sceIoOpen(DIR_PATH "/glprobe.mask", SCE_O_RDONLY, 0);
@@ -482,9 +781,18 @@ int main() {
     sceIoMkdir(DIR_PATH, 0777);
     g_fd = sceIoOpen(LOG_PATH, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
     log_line("INFO glprobe start");
+    // The clocks the client sets in platform::vita::initProcess (VITA-6); an app starts at 333/222/222.
+    scePowerSetArmClockFrequency(444);
+    scePowerSetBusClockFrequency(222);
+    scePowerSetGpuClockFrequency(222);
+    scePowerSetGpuXbarClockFrequency(166);
 
     char d[160];
     vglSetupRuntimeShaderCompiler(SHARK_OPT_DEFAULT, 0, 0, 0);
+#ifdef GLPROBE_CUSTOM_VGL
+    // Only in a vitaGL built with HAVE_SHADER_CACHE=1: keep the cache inside our own folder, easy to delete.
+    vglSetShaderCachePath("ux0:data/wowee/shader_cache");
+#endif
     const unsigned initMode = read_init_mode();
     // vglInit* returns GL_TRUE ONLY WHEN THE REQUESTED RESOLUTION HAD TO BE LOWERED ("res_fallback" in vitaGL's
     // vgl.c) and GL_FALSE on a normal success, so the return value says nothing about whether init worked.
@@ -529,6 +837,8 @@ int main() {
 
     if (mask & 2) test_dxt();
     if (mask & 32) test_dxt_variants();
+    if (mask & 64) test_draw_cost();
+    if (mask & 128) test_shaders();
     if (mask & 4) test_fbo_scale();
     if (mask & 8) test_imgui();
 
