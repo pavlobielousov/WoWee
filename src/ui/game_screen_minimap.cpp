@@ -1098,9 +1098,9 @@ void GameScreen::renderMinimapPartyDots(const MinimapFrame& frame, game::GameHan
             {
                 uint8_t pmk = gameHandler.getEntityRaidMark(member.guid);
                 if (pmk < game::GameHandler::kRaidMarkCount) {
-                    if (VkDescriptorSet markTex = ui::getRaidTargetIcon(pmk, services_.assetManager)) {
+                    if (rendering::UiTexture markTex = ui::getRaidTargetIcon(pmk, services_.assetManager)) {
                         constexpr float kMarkSize = 10.0f;
-                        frame.drawList->AddImage((ImTextureID)(uintptr_t)markTex,
+                        frame.drawList->AddImage(markTex.imguiId(),
                             ImVec2(sx - kMarkSize * 0.5f, sy - 4.0f - kMarkSize),
                             ImVec2(sx + kMarkSize * 0.5f, sy - 4.0f));
                     }

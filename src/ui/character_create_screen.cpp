@@ -413,7 +413,7 @@ void CharacterCreateScreen::render(game::GameHandler& /*gameHandler*/) {
         preview_->render();
         preview_->requestComposite();
     }
-    const bool hasPreview = (preview_ && preview_->getTextureId() != nullptr &&
+    const bool hasPreview = (preview_ && static_cast<bool>(preview_->getTextureId()) &&
                              preview_->getWidth() > 0 && preview_->getHeight() > 0);
 
     const ImVec2 screen = ImGui::GetIO().DisplaySize;
@@ -496,7 +496,7 @@ void CharacterCreateScreen::render(game::GameHandler& /*gameHandler*/) {
         const float imgX = page.x0 + (previewW - imgW) * 0.5f;
         const ImVec2 imgA(imgX, bodyTop + mat);
         const ImVec2 imgB(imgX + imgW, bodyTop + mat + imgH);
-        ui_.image(reinterpret_cast<ImTextureID>(preview_->getTextureId()), imgA, imgB);
+        ui_.image(preview_->getTextureId().imguiId(), imgA, imgB);
 
         // Mouse drag rotation and hover-only wheel zoom on the preview image.
         if (ui_.hover(imgA, imgB)) {

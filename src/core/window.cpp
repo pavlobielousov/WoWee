@@ -8,6 +8,7 @@
 #include "core/config_paths.hpp"
 #include "stb_image.h"
 #include "rendering/vk_context.hpp"
+#include "rendering/vk_ui_texture_service.hpp"
 #include <SDL3/SDL_vulkan.h>
 #include <cstdlib>
 #ifdef __APPLE__
@@ -52,6 +53,8 @@ Window::Window(const WindowConfig& config)
     , fullscreen(config.fullscreen)
     , vsync(config.vsync) {
 }
+
+rendering::IUiTextureService* Window::getUiTextureService() const { return uiTextures.get(); }
 
 Window::~Window() {
     shutdown();
@@ -223,6 +226,7 @@ bool Window::initialize() {
         LOG_ERROR("Failed to initialize Vulkan context");
         return false;
     }
+    uiTextures = std::make_unique<rendering::VkUiTextureService>(*vkContext);
 
 #ifdef __ANDROID__
     // SDL and the Vulkan driver leave the working directory at /system/bin on
@@ -276,6 +280,7 @@ void Window::setWindowIcon() {
 
 void Window::shutdown() {
     LOG_DEBUG("Window::shutdown - vkContext...");
+    uiTextures.reset();  // a view of the context: gone before it
     if (vkContext) {
         vkContext->shutdown();
         vkContext.reset();

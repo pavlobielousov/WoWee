@@ -110,9 +110,9 @@ void CombatUI::renderCooldownTracker(game::GameHandler& gameHandler,
             if (name.empty()) continue;  // skip unnamed spells (internal/passive)
 
             // Small icon if available
-            VkDescriptorSet icon = assetMgr ? getSpellIcon(cd.spellId, assetMgr) : VK_NULL_HANDLE;
+            rendering::UiTexture icon = assetMgr ? getSpellIcon(cd.spellId, assetMgr) : rendering::kNoUiTexture;
             if (icon) {
-                ImGui::Image((ImTextureID)(uintptr_t)icon, ImVec2(14, 14));
+                ImGui::Image(icon.imguiId(), ImVec2(14, 14));
                 ImGui::SameLine(0, 3);
             }
 

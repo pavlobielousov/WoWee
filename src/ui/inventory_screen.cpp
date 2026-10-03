@@ -102,7 +102,7 @@ void InventoryScreen::renderItemTooltip(const game::ItemQueryResponseData& info,
     ui::renderItemTooltip(info, inventory, itemGuid, gameHandler_, assetManager_);
 }
 
-VkDescriptorSet InventoryScreen::getItemIcon(uint32_t displayInfoId) {
+rendering::UiTexture InventoryScreen::getItemIcon(uint32_t displayInfoId) {
     // The shared cache, so an item drawn here and on the action bar is
     // uploaded once. See itemIconTexture.
     return itemIconTexture(displayInfoId, assetManager_,
@@ -212,7 +212,7 @@ void InventoryScreen::cancelPickup(game::Inventory& inv) {
 ///
 /// Nothing in the client used the cursor art at all, so every cursor that
 /// meant something drew whatever the calling code had to hand.
-VkDescriptorSet InventoryScreen::castCursorTexture() {
+rendering::UiTexture InventoryScreen::castCursorTexture() {
     if (!castCursorTexture_) {
         if (assetManager_ && assetManager_->isInitialized()) {
             castCursorTexture_ = uploadUiTextureFromBlp(
@@ -255,9 +255,9 @@ void InventoryScreen::renderItemTargetCursor() {
     // for a target. This drew the item's icon with a green box around it - the
     // picture of the thing being used rather than the instruction to pick
     // something - and Interface\\Cursor\\Cast.blp says it properly.
-    VkDescriptorSet castCursor = castCursorTexture();
+    rendering::UiTexture castCursor = castCursorTexture();
     if (castCursor) {
-        drawList->AddImage((ImTextureID)(uintptr_t)castCursor, pos,
+        drawList->AddImage(castCursor.imguiId(), pos,
                            ImVec2(pos.x + size, pos.y + size));
     } else {
         // Only until the art resolves, and still readable as "pick something".

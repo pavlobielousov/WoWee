@@ -5,7 +5,7 @@
 #include <SDL3/SDL.h>
 
 namespace wowee {
-namespace rendering { class VkContext; }
+namespace rendering { class VkContext; class IUiTextureService; class VkUiTextureService; }
 
 namespace core {
 
@@ -78,10 +78,17 @@ public:
     // Vulkan context access
     [[nodiscard]] rendering::VkContext* getVkContext() const { return vkContext.get(); }
 
+    /// What the interface puts pictures on screen with (VITA-12): upload a decoded image, get an id ImGui can draw.
+    /// Null before initialize() and after shutdown(). The interface asks this instead of reaching for the Vulkan
+    /// context, so it names no Vulkan type.
+    [[nodiscard]] rendering::IUiTextureService* getUiTextureService() const;
+
 private:
     WindowConfig config;
     SDL_Window* window = nullptr;
     std::unique_ptr<rendering::VkContext> vkContext;
+    /// Over vkContext, so it must go first (shutdown() resets it before the context).
+    std::unique_ptr<rendering::VkUiTextureService> uiTextures;
 
     int width;
     int height;

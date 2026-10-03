@@ -384,9 +384,9 @@ void ItemTooltipRenderer::render(
         if (const auto* eq = findComparableEquipped(static_cast<uint8_t>(info->inventoryType))) {
             ImGui::Separator();
             ImGui::TextDisabled("Equipped:");
-            VkDescriptorSet eqIcon = inventoryScreen.getItemIcon(eq->item.displayInfoId);
+            rendering::UiTexture eqIcon = inventoryScreen.getItemIcon(eq->item.displayInfoId);
             if (eqIcon) {
-                ImGui::Image((ImTextureID)(uintptr_t)eqIcon, ImVec2(18.0f, 18.0f));
+                ImGui::Image(eqIcon.imguiId(), ImVec2(18.0f, 18.0f));
                 ImGui::SameLine();
             }
             ImGui::TextColored(InventoryScreen::getQualityColor(eq->item.quality), "%s", eq->item.name.c_str());

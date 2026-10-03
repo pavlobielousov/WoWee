@@ -15,7 +15,7 @@
 #include <memory>
 #include <vector>
 #include <imgui.h>
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 
 namespace wowee {
 namespace game { class GameHandler; }
@@ -33,8 +33,8 @@ public:
     WindowManager() = default;
     ~WindowManager();
 
-    // Callback type for resolving spell icons (spellId, assetMgr) → VkDescriptorSet
-    using SpellIconFn = std::function<VkDescriptorSet(uint32_t, pipeline::AssetManager*)>;
+    // Callback type for resolving spell icons (spellId, assetMgr) → rendering::UiTexture
+    using SpellIconFn = std::function<rendering::UiTexture(uint32_t, pipeline::AssetManager*)>;
 
     // ---- NPC interaction windows ----
 

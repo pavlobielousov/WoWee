@@ -2,7 +2,7 @@
 
 #include "ui/ui_services.hpp"
 #include <imgui.h>
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -30,7 +30,7 @@ public:
     CombatUI() = default;
 
     // ---- Callback type for spell icon lookup (stays in GameScreen) ----
-    using SpellIconFn = std::function<VkDescriptorSet(uint32_t spellId, pipeline::AssetManager*)>;
+    using SpellIconFn = std::function<rendering::UiTexture(uint32_t spellId, pipeline::AssetManager*)>;
 
     // ---- Toggle booleans (written by slash commands / escape handler / settings) ----
     bool showCombatLog_ = false;

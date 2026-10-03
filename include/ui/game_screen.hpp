@@ -16,7 +16,7 @@
 #include "ui/action_bar_panel.hpp"
 #include "ui/window_manager.hpp"
 #include "ui/ui_services.hpp"
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 #include <imgui.h>
 #include <string>
 #include <unordered_map>
@@ -358,13 +358,13 @@ private:
     // WorldMap is now owned by Renderer (accessed via renderer->getWorldMap())
 
     // Spell icon cache: spellId -> GL texture ID
-    std::unordered_map<uint32_t, VkDescriptorSet> spellIconCache_;
+    std::unordered_map<uint32_t, rendering::UiTexture> spellIconCache_;
     // SpellIconID -> icon path (from SpellIcon.dbc)
     std::unordered_map<uint32_t, std::string> spellIconPaths_;
     // SpellID -> SpellIconID (from the active expansion's Spell.dbc layout)
     std::unordered_map<uint32_t, uint32_t> spellIconIds_;
     bool spellIconDbLoaded_ = false;
-    VkDescriptorSet getSpellIcon(uint32_t spellId, pipeline::AssetManager* am);
+    rendering::UiTexture getSpellIcon(uint32_t spellId, pipeline::AssetManager* am);
     /// The vendor cursor, drawn in place of the pointer. True when it drew, so
     /// the caller knows not to also ask for the hand.
     bool drawVendorCursor(game::GameHandler& gameHandler, const ui::ScenePick& pick);

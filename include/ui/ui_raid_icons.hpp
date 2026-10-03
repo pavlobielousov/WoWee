@@ -1,6 +1,6 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 #include <cstdint>
 
 #include "game/group_defines.hpp"
@@ -23,10 +23,10 @@ inline constexpr uint8_t kRaidTargetIconCount =
  * glyph-based version renders as '?' boxes.
  *
  * Textures are uploaded once and cached for the process. Returns
- * VK_NULL_HANDLE if the icon index is out of range, the BLP is missing, or the
+ * rendering::kNoUiTexture if the icon index is out of range, the BLP is missing, or the
  * upload fails - a failed upload is not cached, so it is retried next frame.
  */
-VkDescriptorSet getRaidTargetIcon(uint8_t icon, pipeline::AssetManager* assetManager);
+rendering::UiTexture getRaidTargetIcon(uint8_t icon, pipeline::AssetManager* assetManager);
 
 } // namespace ui
 } // namespace wowee

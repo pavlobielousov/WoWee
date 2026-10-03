@@ -801,8 +801,8 @@ void GameScreen::renderWorldMap(game::GameHandler& gameHandler) {
 // Action Bar
 // ============================================================
 
-VkDescriptorSet GameScreen::getSpellIcon(uint32_t spellId, pipeline::AssetManager* am) {
-    if (spellId == 0 || !am) return VK_NULL_HANDLE;
+rendering::UiTexture GameScreen::getSpellIcon(uint32_t spellId, pipeline::AssetManager* am) {
+    if (spellId == 0 || !am) return rendering::kNoUiTexture;
 
     // Check cache first
     auto cit = spellIconCache_.find(spellId);
@@ -855,26 +855,26 @@ VkDescriptorSet GameScreen::getSpellIcon(uint32_t spellId, pipeline::AssetManage
 
     // Rate-limit GPU uploads per frame to prevent stalls when many icons are uncached
     // (e.g., first login, after loading screen, or many new auras appearing at once).
-    if (!claimUiTextureUpload()) return VK_NULL_HANDLE;  // defer - do NOT cache null here
+    if (!claimUiTextureUpload()) return rendering::kNoUiTexture;  // defer - do NOT cache null here
 
     // Look up spellId -> SpellIconID -> icon path
     auto iit = spellIconIds_.find(spellId);
     if (iit == spellIconIds_.end()) {
-        spellIconCache_[spellId] = VK_NULL_HANDLE;
-        return VK_NULL_HANDLE;
+        spellIconCache_[spellId] = rendering::kNoUiTexture;
+        return rendering::kNoUiTexture;
     }
 
     auto pit = spellIconPaths_.find(iit->second);
     if (pit == spellIconPaths_.end()) {
-        spellIconCache_[spellId] = VK_NULL_HANDLE;
-        return VK_NULL_HANDLE;
+        spellIconCache_[spellId] = rendering::kNoUiTexture;
+        return rendering::kNoUiTexture;
     }
 
     // Path from DBC has no extension - append .blp
     std::string iconPath = pit->second + ".blp";
     // Cached either way, failures included: the HUD asks for this every frame
     // an aura is up, so a missing icon must not be retried each time.
-    VkDescriptorSet ds =
+    rendering::UiTexture ds =
         uploadUiTextureFromBlp(am, iconPath, services_.window);
     spellIconCache_[spellId] = ds;
     return ds;
@@ -1207,14 +1207,14 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                 const std::string& spellName = gameHandler.getSpellName(cs->spellId);
                 {
                     auto* castAm = services_.assetManager;
-                    VkDescriptorSet castIcon = (cs->spellId && castAm)
-                        ? getSpellIcon(cs->spellId, castAm) : VK_NULL_HANDLE;
+                    rendering::UiTexture castIcon = (cs->spellId && castAm)
+                        ? getSpellIcon(cs->spellId, castAm) : rendering::kNoUiTexture;
                     float iconSz = cbH + 8.0f;
                     if (castIcon) {
                         // Draw icon to the left of the cast bar
                         float iconX = barX - iconSz - 2.0f;
                         float iconY = castBarBaseY;
-                        drawList->AddImage((ImTextureID)(uintptr_t)castIcon,
+                        drawList->AddImage(castIcon.imguiId(),
                                            ImVec2(iconX, iconY),
                                            ImVec2(iconX + iconSz, iconY + iconSz));
                         drawList->AddRect(ImVec2(iconX - 1.0f, iconY - 1.0f),
@@ -1524,7 +1524,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
         {
             uint8_t raidMark = gameHandler.getEntityRaidMark(guid);
             if (raidMark < game::GameHandler::kRaidMarkCount) {
-                VkDescriptorSet markTex = ui::getRaidTargetIcon(raidMark, services_.assetManager);
+                rendering::UiTexture markTex = ui::getRaidTargetIcon(raidMark, services_.assetManager);
                 if (markTex) {
                     // Sits above the name, and above the target chevron when this
                     // is the current target, so the three never overlap.
@@ -1532,7 +1532,7 @@ void GameScreen::renderNameplates(game::GameHandler& gameHandler) {
                     const float markBottom = nameY - (isTarget ? 16.0f : 3.0f);
                     const float markTop    = markBottom - kMarkSize;
                     drawList->AddImage(
-                        (ImTextureID)(uintptr_t)markTex,
+                        markTex.imguiId(),
                         ImVec2(sx - kMarkSize * 0.5f, markTop),
                         ImVec2(sx + kMarkSize * 0.5f, markBottom),
                         ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
