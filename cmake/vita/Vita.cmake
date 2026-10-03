@@ -109,6 +109,33 @@ target_compile_definitions(wowee_core_objects PUBLIC WOWEE_VITA_HEAP_MB=${WOWEE_
 target_sources(wowee_core_link_check PRIVATE ${WOWEE_VITA_PLATFORM_SOURCES})
 wowee_vita_executable(wowee_core_link_check)
 
+# wowee_headless (VITA-48): the console client on the core, its own VPK so wowee.vpk keeps working.
+# The Vita has no command line: it reads WOWEE_HEADLESS_* from ux0:data/wowee/env.txt. The client's
+# own expansion tables (about 300 KB, not game data) ship in the VPK under Data/expansions.
+set(WOWEE_VITA_HEADLESS_TITLEID "WOWH00001" CACHE STRING "Title ID of the headless client (9 characters)")
+add_executable(wowee_headless
+    ${WOWEE_ROOT_DIR}/tools/headless/main.cpp
+    ${WOWEE_ROOT_DIR}/tools/headless/headless_client.cpp
+    ${WOWEE_VITA_PLATFORM_SOURCES})
+target_link_libraries(wowee_headless PRIVATE wowee_core ${WOWEE_CORE_LIBS})
+wowee_vita_executable(wowee_headless)
+
+set(WOWEE_VITA_HEADLESS_TABLES)
+file(GLOB _expansion_dirs LIST_DIRECTORIES true ${WOWEE_ROOT_DIR}/Data/expansions/*)
+foreach(dir ${_expansion_dirs})
+    if(NOT IS_DIRECTORY ${dir})
+        continue()
+    endif()
+    get_filename_component(_id ${dir} NAME)
+    file(GLOB _tables ${dir}/*.json)
+    foreach(table ${_tables})
+        get_filename_component(_name ${table} NAME)
+        if(NOT _name STREQUAL "manifest.json")
+            list(APPEND WOWEE_VITA_HEADLESS_TABLES ${table} Data/expansions/${_id}/${_name})
+        endif()
+    endforeach()
+endforeach()
+
 # UNSAFE: extended memory and some sysmodules.
 vita_create_self(eboot.bin wowee UNSAFE)
 vita_create_vpk(wowee.vpk ${WOWEE_VITA_TITLEID} eboot.bin
@@ -118,3 +145,18 @@ vita_create_vpk(wowee.vpk ${WOWEE_VITA_TITLEID} eboot.bin
          ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
          ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
          ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
+
+# vita_create_vpk is a macro that accumulates these across calls: without the reset the second VPK
+# gets the first one's files (a duplicate icon0.png, a build error) and its title ID.
+unset(VITA_PACK_VPK_FLAGS)
+unset(VITA_MKSFOEX_FLAGS)
+unset(resources)
+vita_create_self(headless.bin wowee_headless UNSAFE)
+vita_create_vpk(wowee_headless.vpk ${WOWEE_VITA_HEADLESS_TITLEID} headless.bin
+    VERSION "00.01"
+    NAME "WoWee Headless"
+    FILE ${WOWEE_VITA_RES_DIR}/sce_sys/icon0.png sce_sys/icon0.png
+         ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
+         ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
+         ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+         ${WOWEE_VITA_HEADLESS_TABLES})
