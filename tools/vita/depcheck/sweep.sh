@@ -7,6 +7,7 @@
 #   tools/vita/depcheck/sweep.sh [dir ...]          # default: every src/ subdirectory
 #   JOBS=8 tools/vita/depcheck/sweep.sh network
 #   WARN_FLAGS=-Wconversion OUT=build-vita/sweep-conv tools/vita/depcheck/sweep.sh auth network   # VITA-37: extra warnings, own output dir
+#   SHADOW=1 OUT=build-vita/sweep-shadow tools/vita/depcheck/sweep.sh core ui   # VITA-52: the Vita's shadow headers first on the path, NO Vulkan headers at all
 set -eu
 . "$(dirname "$0")/../lib.sh"
 VITA_ROOT=$(cd "$(dirname "$0")/../../.." && pwd)   # lib.sh assumes a script directly in tools/vita
@@ -20,7 +21,7 @@ DIRS="${*:-addons audio auth core game math network pipeline rendering ui}"
 limits=""
 [ "$runtime" = container ] && limits="--memory ${MEMORY:-10G} --cpus ${CPUS:-8}"
 
-exec "$runtime" run --rm $limits -v "$VITA_ROOT:/workspace" -e JOBS="${JOBS:-7}" -e DIRS="$DIRS" -e OUT="$OUT" -e WARN_FLAGS="${WARN_FLAGS:-}" \
+exec "$runtime" run --rm $limits -v "$VITA_ROOT:/workspace" -e JOBS="${JOBS:-7}" -e DIRS="$DIRS" -e OUT="$OUT" -e WARN_FLAGS="${WARN_FLAGS:-}" -e SHADOW="${SHADOW:-}" \
     "$VITASDK_IMAGE" sh -c '
 cd /workspace
 rm -rf "$OUT/logs"; mkdir -p "$OUT/logs"
@@ -39,7 +40,7 @@ f=\$1; log="$OUT/logs/\$(echo "\$f" | tr / _).log"
 if arm-vita-eabi-g++ -std=gnu++20 -fsyntax-only -Wall -Wextra -Wno-missing-field-initializers \$WARN_FLAGS \
     -DGLM_ENABLE_EXPERIMENTAL -DGLM_FORCE_DEPTH_ZERO_TO_ONE \
     -DVK_USE_64_BIT_PTR_DEFINES=1 -DWOWEE_HAS_AMD_FSR2=0 -DWOWEE_HAS_AMD_FSR3_FRAMEGEN=0 -DWOWEE_AMD_FFX_SDK_KITS=0 \
-    -Iinclude -Isrc -I$OUT/gen -isystem extern -isystem extern/imgui -isystem extern/imgui/backends -isystem extern/lua-5.1.5/src -isystem extern/vk-bootstrap/src \
+    \$SHADOWINC -Iinclude -Isrc -I$OUT/gen -isystem extern -isystem extern/imgui -isystem extern/imgui/backends -isystem extern/lua-5.1.5/src -isystem extern/vk-bootstrap/src \
     \$VKINC "\$f" > "\$log" 2>&1; then st=OK; else st=FAIL; fi
 err=\$(grep -m1 "error:" "\$log" | sed "s/^[^ ]* //" | cut -c1-160)
 w=\$(grep -c "warning:" "\$log" || true)
@@ -53,7 +54,10 @@ sed -e "s/@WOWEE_GIT_VERSION@/sweep/" -e "s/@WOWEE_BUILD_DATE@/today/" include/c
 # https://github.com/KhronosGroup/Vulkan-Headers), use it so Vulkan-including files get past the
 # first include and show their OTHER errors; without it they all stop at vulkan/vulkan.h.
 VKINC=""; [ -d build-vita/vulkan-headers/include ] && VKINC="-isystem build-vita/vulkan-headers/include"
-export VKINC
+# SHADOW=1 (VITA-52): the Vita'"'"'s own declarations of the renderer first, and no Vulkan headers to fall back on.
+SHADOWINC=""
+if [ -n "$SHADOW" ]; then SHADOWINC="-Iinclude/platform/vita/shadow"; VKINC=""; fi
+export VKINC SHADOWINC
 xargs -P "$JOBS" -n 1 "$OUT/one.sh" < "$OUT/files.txt" | sort > "$OUT/results.tsv"
 
 {
