@@ -187,7 +187,7 @@ bool WorldSocket::connect(const std::string& host, uint16_t port) {
         getsockopt(sockfd, SOL_SOCKET, SO_ERROR,
                    reinterpret_cast<char*>(&sockErr), &errLen);
         if (sockErr != 0) {
-            LOG_ERROR("Failed to connect to world server: ", net::errorString(sockErr));
+            LOG_ERROR("Failed to connect to world server: ", net::socketErrorString(sockErr));
             net::closeSocket(sockfd);
             sockfd = INVALID_SOCK;
             return false;

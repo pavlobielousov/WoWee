@@ -518,3 +518,32 @@ auth, lists the character, enters the world as `Vitatester`, logs the MOTD and c
 failed with `Host is unreachable` (and `No data` for 127.0.0.1): macOS asks Vita3K.app for "Local Network" permission on the first LAN connection,
 and until it is granted (System Settings, Privacy & Security, Local Network) the emulator cannot reach any LAN host. Vita3K proves the code path,
 not Wi-Fi, speed or memory: the real-device run is a VITA-34 task.
+
+## 16. Networking on the Vita (VITA-7) *(Vita3K and a real Vita Slim, quiet zone; the busy-capital run is VITA-50)*
+
+`src/network` runs on the Vita through `net_platform.hpp`'s POSIX branch: newlib maps BSD sockets to sceNet after `initProcess()` (section 12) has called
+`sceNetInit`. `tools/vita/depcheck` (section `sockets`, needs `python3 tools/vita/depcheck/echo_server.py` on the Mac; `depcheck_host.txt` in
+`ux0:data/wowee` names its LAN IP, and Vita3K.app needs macOS "Local Network" permission, section 15) measured what that branch relies on:
+
+| Call | Vita3K result | `net_platform.hpp` expects |
+|---|---|---|
+| non-blocking `connect` | -1, `errno` 119 | `EINPROGRESS` (newlib 119) ok |
+| non-blocking `recv`, nothing to read | -1, `errno` 11 | `EAGAIN`/`EWOULDBLOCK` (11) ok |
+| `recv` after the peer closed | 0 | 0 means closed ok |
+| `send` after the peer closed | succeeds twice (no `EPIPE`) | the emulator's host stack; real device unknown, VITA-34 |
+| `getsockopt(SO_ERROR)`, refused | **61** (newlib `ECONNREFUSED` is 111) | the code only tests `!= 0`; the message used `strerror`, which named the wrong error |
+| `sceNetCtlInetGetState` | 3 = connected | |
+
+So `errno` values are newlib's and need no arm; only `SO_ERROR` is in sceNet numbers. Two small gated additions in `net_platform.hpp`
+(`include/platform/vita/net_state.hpp` holds the logic): `net::socketErrorString()` (the two `SO_ERROR` sites use it; elsewhere it is `errorString`;
+on the Vita 61 reads "connection refused", the other BSD numbers 50/51/54/60/64/65 are mapped by convention and unverified) and a Wi-Fi check at the top of
+`openResolvedSocket` that fails with "Wi-Fi is not connected (network state N)" instead of a bare connect error. A failed state query does not block
+the connection. Not testable on Vita3K: a disconnected state. Still open (hardware): the async pump at 444 MHz with `WOWEE_NET_ASYNC_PUMP` 1 vs 0 (needs
+a busy area), DNS (`getaddrinfo("localhost")` works, a real name is untested), `EPIPE`, and the 30-minute session.
+
+**On the real Vita (2026-10-03, Slim, Wi-Fi to a LAN AzerothCore 3.3.5a, `wowee_headless` as the load).**
+- DepCheck's socket section gives the same results as Vita3K (table above); `send` after a peer close succeeds with no `EPIPE` there too; `SO_ERROR` for a refused connection is 61.
+- Login, realm list, world entry, chat and entity log work (about 90 creatures around a level-1 character in Northshire). The network pump thread runs on core 1 at priority 112 as VITA-8 laid out.
+- **Quiet-zone session, 30 minutes (13:42 to 14:12), no disconnect, no crash:** heap in use 415 to 417 KB (`mallinfo`; flat, no leak seen, but only what newlib's malloc reports), arena 448 to 456 KB, game update 0.14 ms average with a few 6 to 16 ms outliers, CPU 2.0 % main + 2.4 % network pump = 4.4 % of one core, constant over the 29 one-minute windows. The slowest packet handlers were 17 to 46 ms (`SMSG_WARDEN_DATA`, `SMSG_AUTH_RESPONSE`, `SMSG_LOGIN_VERIFY_WORLD`). `WOWEE_NET_ASYNC_PUMP=0` (90 s): 2.2 % on the main thread and no pump thread, so in a quiet area the async thread roughly doubles the CPU. A busy area is not measured yet (VITA-50).
+- **Traps found on hardware.** (1) `sceKernelGetThreadRunStatus` **data-aborts** (crash dump, PC in `SceLibKernel`) even with valid arguments: do not call it. Per-thread CPU comes from `SceKernelThreadInfo::runClocks` (`tools/headless/run_stats.hpp`, thread ids from `platform::vita::registeredThreads()`). (2) A program that takes no input is suspended by the system after about 90 seconds (the screen turns off): call `sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT)` about once a second (`RunStats::sample()` does). (3) The file log is buffered and its tail is lost when the app dies: for a long or crashing run use the UDP sink (`WOWEE_LOG_UDP=<mac ip>:9999` in `env.txt`, `tools/vita/logsink.sh`; a datagram has no newline, split on the timestamp). (4) The working directory at launch is the read-only `app0:`: the headless `main()` changes to `ux0:data/wowee` so `./warden_cache` can be created. (5) `tools/vita/parse_core.sh` now works with Python 3 (it patched one line of the pinned tool); the dump's "disassembly at PC" is wrong when PC is in a system module, read the registers and the LR section instead.
+- How the hardware runs were done: the user installs the VPK once in VitaShell; `eboot.bin` is then replaced over FTP (`ux0:app/<TITLEID>/eboot.bin`), `env.txt` goes to `ux0:data/wowee/`, `destroy` then `launch <TITLEID>` over port 1338 starts it. Open: DNS for a real hostname (numeric IPs only so far).

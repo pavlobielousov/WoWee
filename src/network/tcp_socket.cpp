@@ -54,7 +54,7 @@ bool TCPSocket::connect(const std::string& host, uint16_t port) {
         socklen_t errLen = sizeof(sockErr);
         getsockopt(sockfd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&sockErr), &errLen);
         if (sockErr != 0) {
-            LOG_ERROR("Connection failed: ", net::errorString(sockErr));
+            LOG_ERROR("Connection failed: ", net::socketErrorString(sockErr));
             net::closeSocket(sockfd);
             sockfd = INVALID_SOCK;
             return false;

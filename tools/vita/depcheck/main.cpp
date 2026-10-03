@@ -383,6 +383,53 @@ static void sockets() {
         snprintf(b, sizeof b, "sent=%ld select=%d recv=%ld '%s'", static_cast<long>(sn), rs, static_cast<long>(rn), rb);
         check("send/select/recv echo", sn == 4 && rn == 4 && strcmp(rb, "ping") == 0, b);
     }
+    // VITA-7: what net_platform.hpp's POSIX branch relies on besides connect: the errno of a
+    // non-blocking recv with nothing to read, recv and send after the peer closed, the Wi-Fi state.
+    {
+        int cs = -1;
+        int cr2 = sceNetCtlInetGetState(&cs);
+        snprintf(b, sizeof b, "rc=0x%x state=%d (CONNECTED=%d)", cr2, cs, SCE_NETCTL_STATE_CONNECTED);
+        log_line("INFO net sceNetCtlInetGetState %s", b);
+
+        int fd3 = socket(AF_INET, SOCK_STREAM, 0);
+        fcntl(fd3, F_SETFL, fcntl(fd3, F_GETFL, 0) | O_NONBLOCK);
+        connect(fd3, reinterpret_cast<sockaddr*>(&sa), sizeof sa);
+        fd_set w3;
+        FD_ZERO(&w3); FD_SET(fd3, &w3);
+        timeval t3 = {3, 0};
+        int s3 = select(fd3 + 1, nullptr, &w3, nullptr, &t3);
+        if (s3 > 0) {
+            char rb[16];
+            errno = 0;
+            ssize_t r0 = recv(fd3, rb, sizeof rb, 0);
+            int e0 = errno;
+            snprintf(b, sizeof b, "recv rc=%ld errno=%d (EAGAIN=%d EWOULDBLOCK=%d)", static_cast<long>(r0), e0, EAGAIN, EWOULDBLOCK);
+            check("non-blocking recv with no data reports EAGAIN/EWOULDBLOCK", r0 < 0 && (e0 == EAGAIN || e0 == EWOULDBLOCK), b);
+
+            send(fd3, "bye", 3, 0);  // the echo server closes on "bye"
+            fd_set r3;
+            FD_ZERO(&r3); FD_SET(fd3, &r3);
+            timeval t4 = {3, 0};
+            int s4 = select(fd3 + 1, &r3, nullptr, nullptr, &t4);
+            errno = 0;
+            ssize_t r1 = recv(fd3, rb, sizeof rb, 0);
+            int e1 = errno;
+            snprintf(b, sizeof b, "select=%d recv rc=%ld errno=%d (ENOTCONN=%d ECONNRESET=%d)", s4, static_cast<long>(r1), e1, ENOTCONN, ECONNRESET);
+            log_line("INFO net recv after peer close %s", b);
+            check("recv after peer close is 0 or a closed-connection error", r1 == 0 || (r1 < 0 && (e1 == ENOTCONN || e1 == ECONNRESET)), b);
+
+            errno = 0;
+            ssize_t s1 = send(fd3, "x", 1, 0);
+            int e2 = errno;
+            ssize_t s2 = send(fd3, "x", 1, 0);
+            int e3 = errno;
+            snprintf(b, sizeof b, "1st rc=%ld errno=%d, 2nd rc=%ld errno=%d (EPIPE=%d)", static_cast<long>(s1), e2, static_cast<long>(s2), e3, EPIPE);
+            log_line("INFO net send after peer close %s", b);
+        } else {
+            log_line("FAIL net could not connect the VITA-7 probe socket (select=%d)", s3);
+        }
+        close(fd3);
+    }
     // a refused connection must be reported, not hang (port 1 is closed)
     int fd2 = socket(AF_INET, SOCK_STREAM, 0);
     fcntl(fd2, F_SETFL, fcntl(fd2, F_GETFL, 0) | O_NONBLOCK);

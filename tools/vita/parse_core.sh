@@ -24,4 +24,7 @@ exec "$runtime" run --rm -v "$VITA_ROOT:/workspace" "$VITASDK_IMAGE" sh -c '
     # The image has no pip, and the tool predates pyelftools 0.30 (needs elftools.common.py3compat).
     apt-get update -qq && apt-get install -y -qq python3-pip >/dev/null
     pip install -q --break-system-packages pyelftools==0.29 2>/dev/null
+    # The tool is Python 2 era: util.c_str appends bytes to a str (a TypeError on the first real
+    # dump, VITA-7 on hardware). Patch it to indexing that works on both.
+    sed -i "s/out += buf\[off\]/out += chr(buf[off]) if isinstance(buf[off], int) else buf[off]/" "$d/util.py"
     python3 "$d/main.py" "$1" "$2"' sh "$core_rel" "$elf_rel"

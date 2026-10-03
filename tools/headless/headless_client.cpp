@@ -3,6 +3,7 @@
 #include "core/data_paths.hpp"
 #include "core/logger.hpp"
 #include "core/memory_monitor.hpp"
+#include "run_stats.hpp"
 #include "game/packet_parsers.hpp"
 
 #include <cstdlib>
@@ -66,6 +67,13 @@ std::string optionsFromEnv(Options& o) {
         const long v = std::strtol(seconds.c_str(), nullptr, 10);
         if (v < 0 || v > 86400) return "WOWEE_HEADLESS_SECONDS must be 0..86400";
         o.runSeconds = static_cast<int>(v);
+    }
+
+    const std::string stats = envString("WOWEE_HEADLESS_STATS");
+    if (!stats.empty()) {
+        const long v = std::strtol(stats.c_str(), nullptr, 10);
+        if (v < 1 || v > 3600) return "WOWEE_HEADLESS_STATS must be 1..3600 seconds";
+        o.statsSeconds = static_cast<int>(v);
     }
 
     const std::string dataPath = envString("WOW_DATA_PATH");
@@ -384,9 +392,13 @@ void Client::observe() {
     struct Seen { game::ObjectType type; std::string name; };
     std::unordered_map<uint64_t, Seen> known;
     auto nextScan = Clock::now();
+    RunStats stats(options_.statsSeconds);
 
     while (Clock::now() < end && gameHandler_->getState() == game::WorldState::IN_WORLD) {
+        stats.tickBegin();
         tick();
+        stats.tickEnd();
+        stats.sample();
 
         for (const auto& m : gameHandler_->getChatHistory()) {
             if (m.uid <= lastChatUid) continue;
