@@ -449,13 +449,13 @@ treats as "no module". `memory_monitor.cpp` has a Vita arm (its "total RAM" is t
   10 GB and 8 CPUs** (Apple's default 1 GB thrashed and never finished); eight parallel `-O2 -g` compiles of the game sources were killed for
   memory even then, hence `JOBS=5`.
 
-## 15. wowee_headless: the console client (VITA-48) *(desktop: verified against a LAN AzerothCore; Vita build is PR 3)*
+## 15. wowee_headless: the console client (VITA-48) *(desktop: verified against a LAN AzerothCore; Vita build is PR 3, verified on Vita3K up to the network)*
 
 `wowee_headless` (`tools/headless/`, fork-only) is a console program that uses only `wowee_core`. It does by hand what `Application` and the
 login, realm and character screens do: sync and load the expansion tables (`syncClientTables`, `ExpansionRegistry`, opcode and update-field
 tables, packet parsers, DBC layouts), authenticate (`AuthHandler`, `ClientInfo` filled as `AuthScreen::beginAuthAttempt` does), connect to the
 chosen realm's world server and wait for the character list, which the world server requests by itself after world auth. PR 1 stops there;
-PR 2 enters the world as character N and logs chat and entities until a run limit; the Vita build is PR 3. No `AssetManager` is built (`services.assetManager` is null).
+PR 2 enters the world as character N and logs chat and entities until a run limit; the Vita build is PR 3 (below). No `AssetManager` is built (`services.assetManager` is null).
 
 **Build and run (desktop, in the container; the host has no toolchain).**
 
@@ -500,3 +500,21 @@ world-entry callback). The driver then prints, at WARNING level so the default l
 `[entity =]` when its name arrives later, `[entity -]` when it leaves. A 25 s run as a level-1 character in Northshire logged about 90 creatures
 (wolves, guards, rabbits) and exited 0 with both sockets disconnected. Without an `AssetManager` the world handlers ran without a crash; one
 warning ("Quest login resync timed out") is the only anomaly. A character index past the list exits 2.
+
+**Vita build (PR 3).** `JOBS=5 tools/vita/build.sh` now also produces `build-vita/wowee_headless.vpk` (title ID `WOWH00001`, `-DWOWEE_VITA_HEADLESS_TITLEID`), next
+to `wowee.vpk`. The target is in `cmake/vita/Vita.cmake` (links `wowee_core` + `ssl crypto z pthread`, `wowee_vita_executable()`); the same
+`tools/headless/main.cpp` runs, with a `__vita__` arm that calls `platform::vita::initProcess()` first. There is no command line: put the
+`WOWEE_HEADLESS_*` settings in `ux0:data/wowee/env.txt` (`KEY=VALUE`, see section 12). The VPK carries the client's own tables (about 300 KB,
+`Data/expansions/<id>/*.json`) under `app0:Data`, and on the Vita the driver reads them from there (`installRoot = dataRoot = app0:Data`) because
+`syncClientTables` only updates expansions a data root already holds. The log is `ux0:data/wowee/*.log` (or UDP, `WOWEE_LOG_UDP`); the `[chat]` and
+`[entity]` lines are log lines, there is no console. **Trap:** `vita_create_vpk` is a macro that keeps its `-a` file list and title ID in variables
+across calls, so a second VPK in one project inherits the first one's files (a duplicate `icon0.png` error); `Vita.cmake` unsets them between calls.
+
+Vita3K smoke test (2026-10-03): `tools/vita/vita3k_macos.sh build-vita/wowee_headless.vpk WOWH00001 --seconds 45` with a test `env.txt` in
+`<pref-path>/ux0/data/wowee/` (delete it afterwards; it holds credentials). **Verified against the LAN AzerothCore:** it finds the four
+expansions in `app0:Data`, loads the wotlk tables (1306 opcodes, 79 update fields, 40 DBC layouts), authenticates, receives the realm list, passes world
+auth, lists the character, enters the world as `Vitatester`, logs the MOTD and channel joins and about 95 creatures, and disconnects cleanly after
+`WOWEE_HEADLESS_SECONDS`. Warden's module load fails (the Vita stub refuses by design) and the server did not drop the connection. **Trap:** the first run
+failed with `Host is unreachable` (and `No data` for 127.0.0.1): macOS asks Vita3K.app for "Local Network" permission on the first LAN connection,
+and until it is granted (System Settings, Privacy & Security, Local Network) the emulator cannot reach any LAN host. Vita3K proves the code path,
+not Wi-Fi, speed or memory: the real-device run is a VITA-34 task.

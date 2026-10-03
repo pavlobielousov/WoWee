@@ -5,11 +5,20 @@
 
 #include "core/logger.hpp"
 
+#ifdef __vita__
+#include "platform/vita/vita_platform.hpp"
+#endif
+
 #include <csignal>
 #include <cstdio>
 
 int main() {
-#ifndef _WIN32
+#ifdef __vita__
+    // Heap, stack, sceNet, ux0:data/wowee and env.txt (the Vita has no command line or shell
+    // environment, so every setting comes from ux0:data/wowee/env.txt). Before the logger.
+    wowee::platform::vita::initProcess();
+#endif
+#if !defined(_WIN32) && !defined(__vita__)
     // A server that drops the connection must not kill the driver with SIGPIPE.
     std::signal(SIGPIPE, SIG_IGN);
 #endif

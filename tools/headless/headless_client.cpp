@@ -71,6 +71,13 @@ std::string optionsFromEnv(Options& o) {
     const std::string dataPath = envString("WOW_DATA_PATH");
     o.dataRoot = dataPath.empty() ? "./Data" : dataPath;
     o.installRoot = "Data";
+#ifdef __vita__
+    // The VPK carries the client's own tables under app0:Data/expansions and there is no
+    // extraction on the card, so read them from there: syncClientTables only updates expansions
+    // the data root already holds, so it would copy nothing to an empty ux0:data/wowee/Data.
+    o.installRoot = "app0:Data";
+    o.dataRoot = o.installRoot;
+#endif
 
     std::string missing;
     auto need = [&](const std::string& value, const char* name) {
