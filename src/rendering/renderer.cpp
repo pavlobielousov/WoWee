@@ -51,6 +51,7 @@
 #include "game/game_handler.hpp"
 #include "pipeline/m2_loader.hpp"
 #include <algorithm>
+#include <limits>
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"
@@ -1085,6 +1086,45 @@ void Renderer::setMsaaSamples(VkSampleCountFlagBits samples) {
     // Defer to between frames - cannot destroy render pass/framebuffers mid-frame
     pendingMsaaSamples_ = samples;
     msaaChangePending_ = true;
+}
+
+void Renderer::setMsaaSamples(int samples) {
+    setMsaaSamples(static_cast<VkSampleCountFlagBits>(samples));
+}
+
+void Renderer::beginUploadBatch() { if (vkCtx) vkCtx->beginUploadBatch(); }
+void Renderer::endUploadBatch() { if (vkCtx) vkCtx->endUploadBatch(); }
+void Renderer::endUploadBatchSync() { if (vkCtx) vkCtx->endUploadBatchSync(); }
+
+bool Renderer::isDeviceLost() const { return vkCtx && vkCtx->isDeviceLost(); }
+
+void Renderer::waitIdle(const char* where) {
+    if (vkCtx) vkCtx->waitIdle(where);
+}
+
+void Renderer::waitIdleUnlessLost() {
+    if (vkCtx && !vkCtx->isDeviceLost()) vkDeviceWaitIdle(vkCtx->getDevice());
+}
+
+const std::vector<std::pair<const char*, double>>& Renderer::gpuTimings() const {
+    static const std::vector<std::pair<const char*, double>> kNone;
+    return vkCtx ? vkCtx->gpuTimings() : kNone;
+}
+
+void Renderer::reinitQuestMarkers(pipeline::AssetManager* assets) {
+    // Quest markers are billboard sprites; the QuestMarkerRenderer handles texture loading and pipeline setup during
+    // world initialization. Calling initialize() again is a no-op if already done.
+    auto* qmr = getQuestMarkerRenderer();
+    if (!qmr || !vkCtx) return;
+    VkDescriptorSetLayout pfl = getPerFrameSetLayout();
+    if (pfl == VK_NULL_HANDLE) return;
+    if (!qmr->initialize(vkCtx, pfl, assets)) {
+        LOG_WARNING("Quest marker renderer re-init failed (non-fatal)");
+    }
+}
+
+int Renderer::getMaxMsaaSamples() const {
+    return vkCtx ? static_cast<int>(vkCtx->getMaxUsableSampleCount()) : std::numeric_limits<int>::max();
 }
 
 void Renderer::applyMsaaChange() {

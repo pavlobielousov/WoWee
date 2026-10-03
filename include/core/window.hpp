@@ -3,10 +3,9 @@
 #include <string>
 #include <memory>
 #include <SDL3/SDL.h>
-#include <vulkan/vulkan.h>
 
 namespace wowee {
-namespace rendering { class VkContext; }
+namespace rendering { class VkContext; class IUiTextureService; class VkUiTextureService; class IImGuiBackend; class VkImGuiBackend; }
 
 namespace core {
 
@@ -74,15 +73,42 @@ public:
     void setVsync(bool enable);
     void applyResolution(int w, int h);
 
+    /// The anisotropic filtering ceiling for textures, 1 to 16. A no-op with no renderer context.
+    void setAnisotropyLimit(float limit);
+
+    /// The drawing surface and its swapchain, which the application shell has to manage by hand on platforms that
+    /// take the surface away (a phone sending the app to the background) and when the window resizes (VITA-12: the
+    /// shell used to do this through the Vulkan context). All do nothing, or answer "fine", with no renderer context.
+    void releaseSurface();
+    /// Rebuild the surface at the window's pixel size. False if that failed and the client cannot draw.
+    [[nodiscard]] bool restoreSurface();
+    [[nodiscard]] bool isSurfaceLost() const;
+    /// The swapchain is the wrong size: rebuild it before the next frame.
+    void markSwapchainDirty();
+
     [[nodiscard]] SDL_Window* getSDLWindow() const { return window; }
 
     // Vulkan context access
     [[nodiscard]] rendering::VkContext* getVkContext() const { return vkContext.get(); }
 
+    /// What the interface puts pictures on screen with (VITA-12): upload a decoded image, get an id ImGui can draw.
+    /// Null before initialize() and after shutdown(). The interface asks this instead of reaching for the Vulkan
+    /// context, so it names no Vulkan type.
+    [[nodiscard]] rendering::IUiTextureService* getUiTextureService() const;
+
+    /// ImGui's renderer backend for this window (VITA-12). Exists from a successful initialize() until the window is
+    /// destroyed (it outlives shutdown() on purpose, so the interface can still stop ImGui after the window's
+    /// renderer context is gone); null before initialize().
+    [[nodiscard]] rendering::IImGuiBackend* getImGuiBackend() const;
+
 private:
     WindowConfig config;
     SDL_Window* window = nullptr;
     std::unique_ptr<rendering::VkContext> vkContext;
+    /// Over vkContext, so it must go first (shutdown() resets it before the context).
+    std::unique_ptr<rendering::VkUiTextureService> uiTextures;
+    /// Not reset in shutdown(): see getImGuiBackend(). It is told when the context goes.
+    std::unique_ptr<rendering::VkImGuiBackend> imguiBackend;
 
     int width;
     int height;

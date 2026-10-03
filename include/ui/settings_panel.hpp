@@ -3,7 +3,6 @@
 #include "ui/buff_bar_layout.hpp"
 #include "ui/graphics_defaults.hpp"
 #include "ui/ui_services.hpp"
-#include <vulkan/vulkan.h>
 #include <algorithm>
 #include <string>
 #include <functional>

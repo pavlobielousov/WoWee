@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 
 struct ImDrawList;   // global, as ImGui declares it
 struct ImFont;
@@ -24,7 +24,6 @@ struct ImVec2;
 
 namespace wowee {
 namespace pipeline { class AssetManager; }
-namespace rendering { class VkContext; }
 
 namespace ui {
 
@@ -33,7 +32,7 @@ struct Widget;
 
 class WidgetRenderer {
 public:
-    void initialize(pipeline::AssetManager* assets, rendering::VkContext* vkCtx);
+    void initialize(pipeline::AssetManager* assets, rendering::IUiTextureService* uiTextures);
 
     /// Lay the tree out for this screen and draw it. Safe to call with no
     /// device or assets - it simply does nothing, which is what the headless
@@ -74,11 +73,11 @@ public:
 
 private:
     /// Descriptor set for an Interface\ path, loading it on first use. Returns
-    /// VK_NULL_HANDLE for anything missing, and remembers the failure so a
+    /// rendering::kNoUiTexture for anything missing, and remembers the failure so a
     /// mistyped path is not re-read every frame.
-    VkDescriptorSet texture(const std::string& path, bool add = false);
+    rendering::UiTexture texture(const std::string& path, bool add = false);
     /// Already-uploaded texture for a path, without triggering an upload.
-    [[nodiscard]] VkDescriptorSet resident(const std::string& path, bool add = false) const;
+    [[nodiscard]] rendering::UiTexture resident(const std::string& path, bool add = false) const;
 
     /// scale is pixels per interface unit. The rect arrives in pixels, but a
     /// backdrop's insets and edge size are authored in units like everything
@@ -153,8 +152,8 @@ private:
                       float x0, float y0, float x1, float y1);
 
     pipeline::AssetManager* assets_ = nullptr;
-    rendering::VkContext* vkCtx_ = nullptr;
-    std::unordered_map<std::string, VkDescriptorSet> textures_;
+    rendering::IUiTextureService* uiTextures_ = nullptr;
+    std::unordered_map<std::string, rendering::UiTexture> textures_;
     /// The cached set for a path, or null when nothing is cached for it -
     /// which is different from a cached kMissing, and both callers care.
     ///
@@ -162,7 +161,7 @@ private:
     /// value, so the ordinary case copied the path onto the heap purely to
     /// look it up. The draw pass does that twice for every texture on screen,
     /// every frame.
-    [[nodiscard]] const VkDescriptorSet* cachedTexture(const std::string& path,
+    [[nodiscard]] const rendering::UiTexture* cachedTexture(const std::string& path,
                                                        bool add) const;
     /// Image dimensions by path, including the ones that could not be read -
     /// stored as zero so a missing file is looked for once and not once a frame.

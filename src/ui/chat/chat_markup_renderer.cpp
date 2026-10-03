@@ -75,9 +75,9 @@ void ChatMarkupRenderer::render(
             if (itemEntry > 0 && ctx.gameHandler && ctx.inventory) {
                 const auto* chatInfo = ctx.gameHandler->getItemInfo(itemEntry);
                 if (chatInfo && chatInfo->valid && chatInfo->displayInfoId != 0) {
-                    VkDescriptorSet chatIcon = ctx.inventory->getItemIcon(chatInfo->displayInfoId);
+                    rendering::UiTexture chatIcon = ctx.inventory->getItemIcon(chatInfo->displayInfoId);
                     if (chatIcon) {
-                        ImGui::Image((ImTextureID)(uintptr_t)chatIcon, ImVec2(12, 12));
+                        ImGui::Image(chatIcon.imguiId(), ImVec2(12, 12));
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                             ItemTooltipRenderer::render(itemEntry, *ctx.gameHandler, *ctx.inventory, ctx.assetMgr);
@@ -104,12 +104,12 @@ void ChatMarkupRenderer::render(
         }
         case SegmentType::SpellLink: {
             // Small icon (use spell icon cache if available)
-            VkDescriptorSet spellIcon = VK_NULL_HANDLE;
+            rendering::UiTexture spellIcon = rendering::kNoUiTexture;
             if (seg.id > 0 && ctx.getSpellIcon && ctx.assetMgr) {
                 spellIcon = ctx.getSpellIcon(seg.id, ctx.assetMgr);
             }
             if (spellIcon) {
-                ImGui::Image((ImTextureID)(uintptr_t)spellIcon, ImVec2(12, 12));
+                ImGui::Image(spellIcon.imguiId(), ImVec2(12, 12));
                 if (ImGui::IsItemHovered() && ctx.spellbook && ctx.gameHandler && ctx.assetMgr) {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                     ctx.spellbook->renderSpellInfoTooltip(seg.id, *ctx.gameHandler, ctx.assetMgr);

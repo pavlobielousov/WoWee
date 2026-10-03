@@ -46,8 +46,11 @@ SHADOW=1 OUT=build-vita/sweep-shadow tools/vita/depcheck/sweep.sh core ui </dev/
 python3 - <<'PYEOF'
 import glob, os, re, collections, sys
 out = 'build-vita/sweep-shadow'
+# Desktop-only implementations that are Vulkan on purpose (the same list, with reasons, as ALLOW in
+# tools/vita/vulkan_leak_check.sh): the Vita has its own core::Window and no detached map window.
+DESKTOP_ONLY = {'src/core/window.cpp', 'src/ui/map_window.cpp'}
 direct = collections.defaultdict(list)   # header that includes vulkan.h -> sources behind it
-poison, sigs, bad = [], [], []
+poison, sigs, bad, expected = [], [], [], []
 for log in sorted(glob.glob(f'{out}/logs/*.log')):
     t = open(log).read()
     src = os.path.basename(log)[:-4].replace('_', '/', 1)
@@ -57,7 +60,10 @@ for log in sorted(glob.glob(f'{out}/logs/*.log')):
     if m and (m.group(1).startswith(('include/ui/', 'include/core/', 'src/ui/', 'src/core/'))):
         direct[m.group(1)].append(src)
     elif 'leaked outside rendering/ (VITA-12)' in t:
-        poison.append(src)
+        if os.path.basename(log)[:-4] in {d.replace('/', '_') for d in DESKTOP_ONLY}:
+            expected.append(src)
+        else:
+            poison.append(src)
     else:
         e = re.search(r'error: (.*)', t)
         msg = e.group(1) if e else '?'
@@ -72,11 +78,11 @@ with open(f'{out}/vita12_worklist.txt', 'w') as f:
         f.write(f'  {h}: blocks {len(srcs)} source file(s)\n')
     f.write('\nSources that include rendering/vk_context.hpp:\n' + ''.join(f'  {s}\n' for s in poison))
     f.write('\nSources using a public method that carries a Vulkan type in its signature:\n' + ''.join(f'  {s}: {m}\n' for s, m in sigs))
-print(f'VITA-12 worklist: {len(direct)} headers, {len(poison)} vk_context users, {len(sigs)} signature users -> {out}/vita12_worklist.txt')
+print(f'VITA-12 worklist: {len(direct)} headers, {len(poison)} vk_context users, {len(sigs)} signature users; {len(expected)} desktop-only file(s) expected to fail -> {out}/vita12_worklist.txt')
 if bad:
     print('FAIL: errors that are not VITA-12 work:')
     for s, m in bad:
         print(f'  {s}: {m[:120]}')
     sys.exit(1)
-print('OK    every remaining failure is VITA-12 work')
+print('OK    every remaining failure is VITA-12 work' if (direct or poison or sigs) else 'OK    VITA-12 is done: the only files that do not parse are the desktop-only implementations')
 PYEOF

@@ -21,17 +21,16 @@
 #include <cstddef>
 #include <iterator>
 
-#include <vulkan/vulkan.h>
-
 namespace wowee::ui {
 
 /// The multisample counts the "antialiasing" choice offers, in its order.
 ///
 /// Four of them, matching the schema's "Off|2x MSAA|4x MSAA|8x MSAA".
-inline VkSampleCountFlagBits msaaSamplesForChoice(int choice) {
-    static constexpr VkSampleCountFlagBits kSamples[] = {
-        VK_SAMPLE_COUNT_1_BIT, VK_SAMPLE_COUNT_2_BIT,
-        VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_8_BIT};
+///
+/// A plain count, not the renderer's enum (VITA-12): the values are the same numbers, and the interface names no
+/// graphics API.
+inline int msaaSamplesForChoice(int choice) {
+    static constexpr int kSamples[] = {1, 2, 4, 8};
     constexpr int kCount = static_cast<int>(std::size(kSamples));
     return kSamples[std::clamp(choice, 0, kCount - 1)];
 }
@@ -75,7 +74,7 @@ inline constexpr int kFsrQualityChoiceCount = 4;
 /// was asked: Apple silicon stops at 4x, so the 8x this offers has to come
 /// back as the choice actually in force rather than leave the control naming
 /// a mode the client is not using.
-inline int msaaChoiceForSamples(VkSampleCountFlagBits samples) {
+inline int msaaChoiceForSamples(int samples) {
     int best = 0;
     for (int i = 0; i < kMsaaChoiceCount; ++i) {
         if (msaaSamplesForChoice(i) <= samples) best = i;

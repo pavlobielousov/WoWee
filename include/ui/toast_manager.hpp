@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ui/ui_services.hpp"
-#include <vulkan/vulkan.h>
 #include <imgui.h>
 #include <string>
 #include <vector>

@@ -152,10 +152,6 @@ private:
         uint32_t internalHeight = 0;
 
         // Off-screen scene target (reduced resolution)
-        AllocatedImage sceneColor{};        // 1x color (non-MSAA render target / MSAA resolve target)
-        AllocatedImage sceneDepth{};        // Depth (matches current MSAA sample count)
-        AllocatedImage sceneMsaaColor{};    // MSAA color target (only when MSAA > 1x)
-        AllocatedImage sceneDepthResolve{}; // Depth resolve (only when MSAA + depth resolve)
 
         // Upscale pipeline
     };
@@ -170,10 +166,6 @@ private:
         bool needsRecreate = false;
 
         // Off-screen scene target (same resolution as swapchain - no scaling)
-        AllocatedImage sceneColor{};        // 1x resolved color target
-        AllocatedImage sceneDepth{};        // Depth (matches MSAA sample count)
-        AllocatedImage sceneMsaaColor{};    // MSAA color target (when MSAA > 1x)
-        AllocatedImage sceneDepthResolve{}; // Depth resolve (MSAA + depth resolve)
         /// sceneColor as a single-sampled colour target of its own. While the
         /// temporal upscaler owns the scene this image is otherwise idle, so
         /// RCAS sharpens into it and FXAA then reads it from its usual
@@ -203,19 +195,12 @@ private:
         // and the render pass resolves both into the single-sampled pair,
         // which is what the upscaler reads. It used to insist on 1x and
         // switch multisampling off behind the player's back to get it.
-        AllocatedImage sceneColor{};        // 1x: the render target, or the resolve target under MSAA
-        AllocatedImage sceneDepth{};        // at the scene's sample count
-        AllocatedImage sceneMsaaColor{};    // MSAA colour target, only while MSAA is on
-        AllocatedImage sceneDepthResolve{}; // 1x depth, only while MSAA is on
 
         // Samplers
 
         // Motion vector buffer (internal resolution)
-        AllocatedImage motionVectors{};
 
         // History buffers (display resolution, ping-pong)
-        AllocatedImage history[2]{};
-        AllocatedImage framegenOutput{};
         bool framegenOutputValid = false;
         uint32_t currentHistory = 0;  // Output index (0 or 1)
 
@@ -257,8 +242,6 @@ private:
     bool initFSR2Resources();
     /// The single-sampled depth the upscaler's passes read: the resolve while
     /// MSAA is on, the scene depth itself otherwise.
-    [[nodiscard]] const AllocatedImage& fsr2ReadDepth() const {
-    }
     void destroyFSR2Resources();
     void dispatchMotionVectors();
     void dispatchAmdFsr2();

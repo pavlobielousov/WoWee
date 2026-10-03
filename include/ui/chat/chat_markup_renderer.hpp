@@ -2,7 +2,7 @@
 
 #include "ui/chat/chat_markup_parser.hpp"
 #include "ui/ui_services.hpp"
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 #include <functional>
 #include <cstdint>
 #include <string>
@@ -25,7 +25,7 @@ struct MarkupRenderContext {
     SpellbookScreen*    spellbook     = nullptr;
     pipeline::AssetManager* assetMgr  = nullptr;
     // Spell icon callback - same as ChatPanel::getSpellIcon
-    std::function<VkDescriptorSet(uint32_t, pipeline::AssetManager*)> getSpellIcon;
+    std::function<rendering::UiTexture(uint32_t, pipeline::AssetManager*)> getSpellIcon;
     // Chat input buffer for shift-click link insertion
     char*   chatInputBuffer   = nullptr;
     size_t  chatInputBufSize  = 0;

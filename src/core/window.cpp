@@ -8,6 +8,8 @@
 #include "core/config_paths.hpp"
 #include "stb_image.h"
 #include "rendering/vk_context.hpp"
+#include "rendering/vk_imgui_backend.hpp"
+#include "rendering/vk_ui_texture_service.hpp"
 #include <SDL3/SDL_vulkan.h>
 #include <cstdlib>
 #ifdef __APPLE__
@@ -52,6 +54,34 @@ Window::Window(const WindowConfig& config)
     , fullscreen(config.fullscreen)
     , vsync(config.vsync) {
 }
+
+void Window::releaseSurface() {
+    if (vkContext) vkContext->releaseSurface();
+}
+
+bool Window::restoreSurface() {
+    if (!vkContext) return true;
+    // Pixels: a surface is built at the drawable size, which is not the window size on a high density display.
+    int w = 0, h = 0;
+    SDL_GetWindowSizeInPixels(window, &w, &h);
+    return vkContext->restoreSurface(window, w, h);
+}
+
+bool Window::isSurfaceLost() const {
+    return vkContext && vkContext->isSurfaceLost();
+}
+
+void Window::markSwapchainDirty() {
+    if (vkContext) vkContext->markSwapchainDirty();
+}
+
+void Window::setAnisotropyLimit(float limit) {
+    if (vkContext) vkContext->setAnisotropyLimit(limit);
+}
+
+rendering::IUiTextureService* Window::getUiTextureService() const { return uiTextures.get(); }
+
+rendering::IImGuiBackend* Window::getImGuiBackend() const { return imguiBackend.get(); }
 
 Window::~Window() {
     shutdown();
@@ -223,6 +253,8 @@ bool Window::initialize() {
         LOG_ERROR("Failed to initialize Vulkan context");
         return false;
     }
+    uiTextures = std::make_unique<rendering::VkUiTextureService>(*vkContext);
+    imguiBackend = std::make_unique<rendering::VkImGuiBackend>(vkContext.get());
 
 #ifdef __ANDROID__
     // SDL and the Vulkan driver leave the working directory at /system/bin on
@@ -276,6 +308,8 @@ void Window::setWindowIcon() {
 
 void Window::shutdown() {
     LOG_DEBUG("Window::shutdown - vkContext...");
+    uiTextures.reset();  // a view of the context: gone before it
+    if (imguiBackend) imguiBackend->contextGone();
     if (vkContext) {
         vkContext->shutdown();
         vkContext.reset();

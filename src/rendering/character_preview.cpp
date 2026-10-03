@@ -1,4 +1,5 @@
 #include "rendering/character_preview.hpp"
+#include "rendering/vk_ui_texture_service.hpp"
 #include "rendering/imgui_texture.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/animation/animation_ids.hpp"
@@ -31,6 +32,11 @@
 
 namespace wowee {
 namespace rendering {
+
+UiTexture CharacterPreview::getTextureId() const {
+    return compositeRendered_ ? toUiTexture(imguiTextureId_) : UiTexture{};
+}
+
 
 namespace {
 

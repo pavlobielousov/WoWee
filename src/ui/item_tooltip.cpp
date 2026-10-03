@@ -52,7 +52,7 @@ bool canUseItemType(const game::GameHandler& gameHandler,
 }
 
 /// The item's icon, through the shared cache.
-VkDescriptorSet itemIcon(uint32_t displayInfoId, pipeline::AssetManager* assetManager) {
+rendering::UiTexture itemIcon(uint32_t displayInfoId, pipeline::AssetManager* assetManager) {
     return itemIconTexture(displayInfoId, assetManager,
                            core::Application::getInstance().getWindow());
 }
@@ -609,9 +609,9 @@ void renderItemTooltip(const game::ItemDef& item, const game::Inventory* invento
             const game::ItemSlot* eq = equipped.slot;
             ImGui::Separator();
             ImGui::TextDisabled("Equipped:");
-            VkDescriptorSet eqIcon = itemIcon(eq->item.displayInfoId, assetManager);
+            rendering::UiTexture eqIcon = itemIcon(eq->item.displayInfoId, assetManager);
             if (eqIcon) {
-                ImGui::Image((ImTextureID)(uintptr_t)eqIcon, ImVec2(18.0f, 18.0f));
+                ImGui::Image(eqIcon.imguiId(), ImVec2(18.0f, 18.0f));
                 ImGui::SameLine();
             }
             ImGui::TextColored(ui::getQualityColor(eq->item.quality), "%s", eq->item.name.c_str());
@@ -1066,8 +1066,8 @@ void renderItemTooltip(const game::ItemQueryResponseData& info, const game::Inve
             const game::ItemSlot* eq = equipped.slot;
             ImGui::Separator();
             ImGui::TextDisabled("Equipped:");
-            VkDescriptorSet eqIcon = itemIcon(eq->item.displayInfoId, assetManager);
-            if (eqIcon) { ImGui::Image((ImTextureID)(uintptr_t)eqIcon, ImVec2(18.0f, 18.0f)); ImGui::SameLine(); }
+            rendering::UiTexture eqIcon = itemIcon(eq->item.displayInfoId, assetManager);
+            if (eqIcon) { ImGui::Image(eqIcon.imguiId(), ImVec2(18.0f, 18.0f)); ImGui::SameLine(); }
             ImGui::TextColored(ui::getQualityColor(eq->item.quality), "%s", eq->item.name.c_str());
             renderEquippedEnhancements(gameHandler, equipped, s_enchLookup);
 

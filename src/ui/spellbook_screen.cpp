@@ -5,7 +5,6 @@
 #include "ui/keybinding_manager.hpp"
 #include "core/input.hpp"
 #include "core/application.hpp"
-#include "rendering/vk_context.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "pipeline/dbc_loader.hpp"
 #include "pipeline/dbc_layout.hpp"

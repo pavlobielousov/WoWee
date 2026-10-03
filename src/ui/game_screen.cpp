@@ -13,7 +13,6 @@
 #include "ui/ui_colors.hpp"
 #include "ui/ui_helpers.hpp"
 #include "ui/ui_texture_load.hpp"
-#include "rendering/vk_context.hpp"
 #include "core/application.hpp"
 #include "core/appearance_composer.hpp"
 #include "addons/addon_manager.hpp"
@@ -1103,14 +1102,14 @@ void GameScreen::renderPlayerInfo(game::GameHandler& gameHandler) {
 /// will not load says so once - a cursor that fails and a thing that has no
 /// cursor of its own both end as the plain hand, and from the chair they look
 /// the same.
-VkDescriptorSet cursorTexture(pipeline::AssetManager* assets, core::Window* window,
+rendering::UiTexture cursorTexture(pipeline::AssetManager* assets, core::Window* window,
                               const char* path) {
-    static std::unordered_map<std::string, VkDescriptorSet> loaded;
+    static std::unordered_map<std::string, rendering::UiTexture> loaded;
     auto it = loaded.find(path);
-    if (it != loaded.end() && it->second != VK_NULL_HANDLE) return it->second;
+    if (it != loaded.end() && it->second != rendering::kNoUiTexture) return it->second;
 
     ui::UiTextureLoad why = ui::UiTextureLoad::Ok;
-    VkDescriptorSet tex = ui::uploadUiTextureFromBlp(assets, path, window, &why);
+    rendering::UiTexture tex = ui::uploadUiTextureFromBlp(assets, path, window, &why);
     if (tex) {
         loaded[path] = tex;
         return tex;
@@ -1120,17 +1119,17 @@ VkDescriptorSet cursorTexture(pipeline::AssetManager* assets, core::Window* wind
         LOG_WARNING("Cursor art ", path, " did not load (", static_cast<int>(why),
                     ") - the pointer stays the plain hand there");
     }
-    return VK_NULL_HANDLE;
+    return rendering::kNoUiTexture;
 }
 
 /// Draw one in place of the pointer. The tip sits at the mouse position, the
 /// way the art is authored.
-void drawCursorTexture(VkDescriptorSet tex) {
+void drawCursorTexture(rendering::UiTexture tex) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     const ImVec2 at = ImGui::GetIO().MousePos;
     constexpr float kSize = 32.0f;
     ImGui::GetForegroundDrawList()->AddImage(
-        (ImTextureID)(uintptr_t)tex, at, ImVec2(at.x + kSize, at.y + kSize));
+        tex.imguiId(), at, ImVec2(at.x + kSize, at.y + kSize));
 }
 
 /// Which cursor a game object wears, by its GameObjectType.
@@ -1177,7 +1176,7 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
 
     // Only a successful upload is cached, so a transient descriptor-pool
     // failure is retried rather than leaving the cursor plain for good.
-    static VkDescriptorSet cursorTex = VK_NULL_HANDLE;
+    static rendering::UiTexture cursorTex = rendering::kNoUiTexture;
     if (!cursorTex) {
         ui::UiTextureLoad why = ui::UiTextureLoad::Ok;
         cursorTex = ui::uploadUiTextureFromBlp(
@@ -1204,7 +1203,7 @@ bool GameScreen::drawVendorCursor(game::GameHandler& gameHandler,
     const ImVec2 at = ImGui::GetIO().MousePos;
     constexpr float kSize = 32.0f;
     ImGui::GetForegroundDrawList()->AddImage(
-        (ImTextureID)(uintptr_t)cursorTex, at,
+        cursorTex.imguiId(), at,
         ImVec2(at.x + kSize, at.y + kSize));
     return true;
 }
@@ -1230,7 +1229,7 @@ bool GameScreen::drawWorldObjectCursor(game::GameHandler& gameHandler,
     auto go = std::static_pointer_cast<game::GameObject>(entity);
     const auto* info = gameHandler.getCachedGameObjectInfo(go->getEntry());
     if (usable) {
-        VkDescriptorSet tex = cursorTexture(services_.assetManager, services_.window,
+        rendering::UiTexture tex = cursorTexture(services_.assetManager, services_.window,
                                             objectCursorPath(info ? info->type : 0u));
         if (!tex) return false;
         drawCursorTexture(tex);

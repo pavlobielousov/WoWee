@@ -13,13 +13,11 @@
 #include "core/version.hpp"
 #include "core/window.hpp"
 #include "rendering/renderer.hpp"
-#include "rendering/vk_context.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "audio/audio_coordinator.hpp"
 #include "audio/music_manager.hpp"
 #include "game/expansion_profile.hpp"
 #include <imgui.h>
-#include <imgui_impl_vulkan.h>
 #include "stb_image.h"
 #include <filesystem>
 #include <fstream>
@@ -67,17 +65,10 @@ AuthScreen::AuthScreen() {
 }
 
 AuthScreen::~AuthScreen() {
-    // The background image was uploaded with plain vkCreateImage and
-    // vkAllocateMemory and nothing released it, so it and its view outlived
-    // the device on every run. bgSampler is the context's, cached and shared,
-    // and bgDescriptorSet belongs to the ImGui backend, which frees its own
-    // pool -- neither is this class's to destroy.
-    if (!bgVkCtx) return;
-    VkDevice device = bgVkCtx->getDevice();
-    if (device == VK_NULL_HANDLE) return;
-    if (bgImageView) { vkDestroyImageView(device, bgImageView, nullptr); bgImageView = VK_NULL_HANDLE; }
-    if (bgImage)     { vkDestroyImage(device, bgImage, nullptr);         bgImage = VK_NULL_HANDLE; }
-    if (bgMemory)    { vkFreeMemory(device, bgMemory, nullptr);          bgMemory = VK_NULL_HANDLE; }
+    // The background texture is the renderer's: it tracks what uploadUiTexture hands out and frees it with itself.
+    // (It was once uploaded here with plain vkCreateImage and vkAllocateMemory, and nothing released it, so the
+    // image outlived the device on every run; going through the shared upload removed the problem rather than
+    // moving the cleanup.)
 }
 
 std::string AuthScreen::makeServerKey(const std::string& host, int port) {
@@ -1030,7 +1021,7 @@ void AuthScreen::drawBackdrop() {
             LOG_WARNING("Auth screen: failed to decode background image");
         }
     }
-    if (!bgDescriptorSet) return;
+    if (!bgTexture) return;
 
     const ImVec2 screen = ImGui::GetIO().DisplaySize;
     const float imgW = static_cast<float>(bgWidth);
@@ -1050,7 +1041,7 @@ void AuthScreen::drawBackdrop() {
         uv0.y = crop;
         uv1.y = 1.0f - crop;
     }
-    ImGui::GetBackgroundDrawList()->AddImage(reinterpret_cast<ImTextureID>(bgDescriptorSet),
+    ImGui::GetBackgroundDrawList()->AddImage(bgTexture.imguiId(),
                                              ImVec2(0, 0), ImVec2(screen.x, screen.y), uv0, uv1);
 }
 
@@ -1437,151 +1428,16 @@ void AuthScreen::loadLoginInfo() {
     LOG_INFO("Login info loaded from ", path);
 }
 
-static uint32_t findMemType(VkPhysicalDevice pd, uint32_t filter, VkMemoryPropertyFlags props) {
-    VkPhysicalDeviceMemoryProperties mp;
-    vkGetPhysicalDeviceMemoryProperties(pd, &mp);
-    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
-        if ((filter & (1 << i)) && (mp.memoryTypes[i].propertyFlags & props) == props) return i;
-    }
-    LOG_ERROR("AuthScreen: no suitable memory type found");
-    return UINT32_MAX;
-}
-
 // Takes pixels already decoded on a worker thread and does the GPU-side work,
 // which has to happen on the main thread.
 bool AuthScreen::uploadBackgroundImage(const unsigned char* data) {
-    auto& app = core::Application::getInstance();
-    auto* renderer = app.getRenderer();
-    if (!renderer) return false;
-    bgVkCtx = renderer->getVkContext();
-    if (!bgVkCtx) return false;
     if (!data) return false;
+    auto* window = core::Application::getInstance().getWindow();
+    auto* textures = window ? window->getUiTextureService() : nullptr;
+    if (!textures) return false;
 
-    VkDevice device = bgVkCtx->getDevice();
-    VkPhysicalDevice physDevice = bgVkCtx->getPhysicalDevice();
-    VkDeviceSize imageSize = static_cast<VkDeviceSize>(bgWidth) * bgHeight * 4;
-
-    // Staging buffer
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingMemory;
-    {
-        VkBufferCreateInfo bufInfo{};
-        bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufInfo.size = imageSize;
-        bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        vkCreateBuffer(device, &bufInfo, nullptr, &stagingBuffer);
-
-        VkMemoryRequirements memReqs;
-        vkGetBufferMemoryRequirements(device, stagingBuffer, &memReqs);
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memReqs.size;
-        allocInfo.memoryTypeIndex = findMemType(physDevice, memReqs.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        vkAllocateMemory(device, &allocInfo, nullptr, &stagingMemory);
-        vkBindBufferMemory(device, stagingBuffer, stagingMemory, 0);
-
-        void* mapped;
-        vkMapMemory(device, stagingMemory, 0, imageSize, 0, &mapped);
-        memcpy(mapped, data, imageSize);
-        vkUnmapMemory(device, stagingMemory);
-    }
-    // The pixels belong to the caller's decoded buffer, not to stb_image.
-
-    // Create VkImage
-    {
-        VkImageCreateInfo imgInfo{};
-        imgInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imgInfo.imageType = VK_IMAGE_TYPE_2D;
-        imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-        imgInfo.extent = {.width = static_cast<uint32_t>(bgWidth), .height = static_cast<uint32_t>(bgHeight), .depth = 1};
-        imgInfo.mipLevels = 1;
-        imgInfo.arrayLayers = 1;
-        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-        imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        vkCreateImage(device, &imgInfo, nullptr, &bgImage);
-
-        VkMemoryRequirements memReqs;
-        vkGetImageMemoryRequirements(device, bgImage, &memReqs);
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memReqs.size;
-        allocInfo.memoryTypeIndex = findMemType(physDevice, memReqs.memoryTypeBits,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        vkAllocateMemory(device, &allocInfo, nullptr, &bgMemory);
-        vkBindImageMemory(device, bgImage, bgMemory, 0);
-    }
-
-    // Transfer
-    bgVkCtx->immediateSubmit([&](VkCommandBuffer cmd) {
-        VkImageMemoryBarrier2 barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barrier.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = bgImage;
-        barrier.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        VkDependencyInfo barrierDep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        barrierDep.dependencyFlags = 0;
-        barrierDep.imageMemoryBarrierCount = 1;
-        barrierDep.pImageMemoryBarriers = &barrier;
-        rendering::cmdPipelineBarrier2(cmd, barrierDep);
-
-        VkBufferImageCopy region{};
-        region.imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1};
-        region.imageExtent = {.width = static_cast<uint32_t>(bgWidth), .height = static_cast<uint32_t>(bgHeight), .depth = 1};
-        vkCmdCopyBufferToImage(cmd, stagingBuffer, bgImage,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-        barrier.srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        VkDependencyInfo toReadDep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        toReadDep.imageMemoryBarrierCount = 1;
-        toReadDep.pImageMemoryBarriers = &barrier;
-        rendering::cmdPipelineBarrier2(cmd, toReadDep);
-    });
-
-    vkDestroyBuffer(device, stagingBuffer, nullptr);
-    vkFreeMemory(device, stagingMemory, nullptr);
-
-    // Image view
-    {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = bgImage;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-        viewInfo.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
-        vkCreateImageView(device, &viewInfo, nullptr, &bgImageView);
-    }
-
-    // Sampler
-    {
-        VkSamplerCreateInfo samplerInfo{};
-        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerInfo.magFilter = VK_FILTER_LINEAR;
-        samplerInfo.minFilter = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        bgSampler = bgVkCtx->getOrCreateSampler(samplerInfo);
-    }
-
-    bgDescriptorSet = ImGui_ImplVulkan_AddTexture(bgSampler, bgImageView,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    bgTexture = textures->upload(data, bgWidth, bgHeight);
+    if (!bgTexture) return false;
 
     LOG_INFO("Auth screen background loaded: ", bgWidth, "x", bgHeight);
     return true;

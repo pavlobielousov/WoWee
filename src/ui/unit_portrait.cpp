@@ -231,7 +231,7 @@ bool UnitPortrait::updateCreature(const std::string& m2Path,
 
 uint64_t UnitPortrait::textureId() const {
     if (!preview_) return 0;
-    return reinterpret_cast<uint64_t>(preview_->getTextureId());
+    return preview_->getTextureId().id;
 }
 
 void UnitPortrait::rotate(float yawDelta) {

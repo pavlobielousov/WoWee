@@ -7,6 +7,7 @@
 struct SDL_Window;
 
 namespace wowee {
+namespace core { class Window; }
 namespace rendering {
 
 class VkContext;
@@ -37,6 +38,8 @@ public:
     // Must be set before initialize() for Vulkan texture upload
     void setVkContext(VkContext* ctx) { vkCtx = ctx; }
     void setSDLWindow(SDL_Window* win) { sdlWindow = win; }
+    /// Take the window's renderer context and its SDL window in one call (VITA-12).
+    void attachWindow(core::Window* window);
 
 private:
     bool loadImage(const std::string& path);

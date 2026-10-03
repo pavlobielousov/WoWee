@@ -8,7 +8,7 @@
 #include "ui/chat/chat_markup_parser.hpp"
 #include "ui/chat/chat_markup_renderer.hpp"
 #include "ui/chat/chat_command_registry.hpp"
-#include <vulkan/vulkan.h>
+#include "rendering/ui_texture.hpp"
 #include <imgui.h>
 #include <string>
 #include <unordered_map>
@@ -121,7 +121,7 @@ public:
     bool& chatPartyBubbles         = settings.partyBubbles;
 
     /** Spell icon lookup callback - set by GameScreen each frame before render(). */
-    std::function<VkDescriptorSet(uint32_t, pipeline::AssetManager*)> getSpellIcon;
+    std::function<rendering::UiTexture(uint32_t, pipeline::AssetManager*)> getSpellIcon;
 
     /** Persist-settings callback - set once by GameScreen so the in-window
      *  quick menu can save appearance changes immediately. */
