@@ -373,6 +373,32 @@ static unsigned read_mask() {
     return mask;
 }
 
+// ux0:data/wowee/glprobe.init (a number) picks the vitaGL init call, to find what an environment accepts:
+// 0 vglInitExtended(0, 960x544, ram_threshold 24 MB)   1 vglInit(8 MB legacy pool)
+// 2 vglInitExtended(8 MB legacy pool, 960x544, ram_threshold 24 MB)
+// 3 vglInitWithCustomSizes(0, 960x544, ram 32 MB, cdram 24 MB, phycont 1 MB, cdlg 0)
+static unsigned read_init_mode() {
+    unsigned mode = 0;
+    SceUID fd = sceIoOpen(DIR_PATH "/glprobe.init", SCE_O_RDONLY, 0);
+    if (fd >= 0) {
+        char t[16] = {0};
+        sceIoRead(fd, t, sizeof t - 1);
+        sceIoClose(fd);
+        mode = static_cast<unsigned>(strtoul(t, nullptr, 10));
+    }
+    return mode;
+}
+
+static GLboolean init_vgl(unsigned mode) {
+    switch (mode) {
+        case 1: return vglInit(0x800000);
+        case 2: return vglInitExtended(0x800000, 960, 544, 0x1800000, SCE_GXM_MULTISAMPLE_NONE);
+        case 3: return vglInitWithCustomSizes(0, 960, 544, 32 * 1024 * 1024, 24 * 1024 * 1024, 1024 * 1024, 0,
+                                              SCE_GXM_MULTISAMPLE_NONE);
+        default: return vglInitExtended(0, 960, 544, 0x1800000, SCE_GXM_MULTISAMPLE_NONE);
+    }
+}
+
 int main() {
     sceIoMkdir("ux0:data", 0777);
     sceIoMkdir(DIR_PATH, 0777);
@@ -381,8 +407,10 @@ int main() {
 
     char d[160];
     vglSetupRuntimeShaderCompiler(SHARK_OPT_DEFAULT, 0, 0, 0);
-    GLboolean ok = vglInitExtended(0, 960, 544, 0x1800000, SCE_GXM_MULTISAMPLE_NONE);
-    check("vglInitExtended(960x544)", ok == GL_TRUE, nullptr);
+    const unsigned initMode = read_init_mode();
+    GLboolean ok = init_vgl(initMode);
+    snprintf(d, sizeof d, "init mode %u", initMode);
+    check("vitaGL init (960x544)", ok == GL_TRUE, d);
     if (ok != GL_TRUE) { log_line("INFO glprobe aborted"); return 1; }
 
     const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
