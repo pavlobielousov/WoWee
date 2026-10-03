@@ -455,7 +455,7 @@ treats as "no module". `memory_monitor.cpp` has a Vita arm (its "total RAM" is t
 login, realm and character screens do: sync and load the expansion tables (`syncClientTables`, `ExpansionRegistry`, opcode and update-field
 tables, packet parsers, DBC layouts), authenticate (`AuthHandler`, `ClientInfo` filled as `AuthScreen::beginAuthAttempt` does), connect to the
 chosen realm's world server and wait for the character list, which the world server requests by itself after world auth. PR 1 stops there;
-entering the world and logging chat and entities is PR 2, the Vita build PR 3. No `AssetManager` is built (`services.assetManager` is null).
+PR 2 enters the world as character N and logs chat and entities until a run limit; the Vita build is PR 3. No `AssetManager` is built (`services.assetManager` is null).
 
 **Build and run (desktop, in the container; the host has no toolchain).**
 
@@ -476,6 +476,8 @@ outside the repo; there is no default server.
 | `WOWEE_HEADLESS_ACCOUNT`, `_PASSWORD` | credentials (never logged, never committed) |
 | `WOWEE_HEADLESS_EXPANSION` | profile id: `classic`, `tbc`, `wotlk`, `turtle`, ... |
 | `WOWEE_HEADLESS_REALM` | realm name (default: first in the list) |
+| `WOWEE_HEADLESS_CHARACTER` | index in the character list to enter as (default 0) |
+| `WOWEE_HEADLESS_SECONDS` | how long to stay in the world, logging, before a clean disconnect (default 20) |
 | `WOWEE_HEADLESS_TIMEOUT` | seconds each phase may take (default 30) |
 | `WOW_DATA_PATH` | data root holding `expansions/<id>/` (default `./Data`) |
 | `WOWEE_REALM_HOST_OVERRIDE` | replaces the host in the realm list (AzerothCore advertises `127.0.0.1`, which inside a container is the container) |
@@ -491,3 +493,10 @@ sends `requestRealmList()` once the state is `AUTHENTICATED`. With no `AssetMana
 through world auth and the character list without a crash. Warden: the server's module is refused on Linux ("Cannot execute Windows x86
 code"), the server did not drop the connection in the few seconds this ran. `WOWEE_LOG_LEVEL=debug` shows the packet-level log.
 `WOWEE_REALM_HOST_OVERRIDE` was not needed here (the realm advertises the LAN address).
+
+**World entry and log (PR 2, LAN AzerothCore, 2026-10-03):** `setActiveCharacterGuid` + `selectCharacter`, then `IN_WORLD` arrives by itself (no
+world-entry callback). The driver then prints, at WARNING level so the default log level shows them: `[chat <type>] sender: text` for each new
+`getChatHistory()` entry, `[entity +] type N guid G "name" at x,y,z` when an entity appears in `getEntityManager()` (checked every 0.5 s),
+`[entity =]` when its name arrives later, `[entity -]` when it leaves. A 25 s run as a level-1 character in Northshire logged about 90 creatures
+(wolves, guards, rabbits) and exited 0 with both sockets disconnected. Without an `AssetManager` the world handlers ran without a crash; one
+warning ("Quest login resync timed out") is the only anomaly. A character index past the list exits 2.

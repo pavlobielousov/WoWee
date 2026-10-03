@@ -6,6 +6,7 @@
 #include "game/packet_parsers.hpp"
 
 #include <cstdlib>
+#include <unordered_map>
 #include <functional>
 #include <thread>
 
@@ -52,6 +53,19 @@ std::string optionsFromEnv(Options& o) {
         const long v = std::strtol(timeout.c_str(), nullptr, 10);
         if (v < 1 || v > 3600) return "WOWEE_HEADLESS_TIMEOUT must be 1..3600 seconds";
         o.phaseSeconds = static_cast<int>(v);
+    }
+
+    const std::string character = envString("WOWEE_HEADLESS_CHARACTER");
+    if (!character.empty()) {
+        const long v = std::strtol(character.c_str(), nullptr, 10);
+        if (v < 0 || v > 255) return "WOWEE_HEADLESS_CHARACTER must be a list index 0..255";
+        o.character = static_cast<int>(v);
+    }
+    const std::string seconds = envString("WOWEE_HEADLESS_SECONDS");
+    if (!seconds.empty()) {
+        const long v = std::strtol(seconds.c_str(), nullptr, 10);
+        if (v < 0 || v > 86400) return "WOWEE_HEADLESS_SECONDS must be 0..86400";
+        o.runSeconds = static_cast<int>(v);
     }
 
     const std::string dataPath = envString("WOW_DATA_PATH");
@@ -314,6 +328,97 @@ int Client::loginAndListCharacters() {
                     ", guid ", c.guid);
     }
     return kOk;
+}
+
+int Client::enterWorldAndObserve() {
+    const auto& chars = gameHandler_->getCharacters();
+    if (options_.character >= static_cast<int>(chars.size())) {
+        LOG_ERROR("Character index ", options_.character, " requested, the account has ",
+                  chars.size());
+        return kUsage;
+    }
+    const auto& chosen = chars[static_cast<size_t>(options_.character)];
+    LOG_WARNING("Entering the world as ", chosen.name, " (guid ", chosen.guid, ")");
+    gameHandler_->setActiveCharacterGuid(chosen.guid);
+    gameHandler_->selectCharacter(chosen.guid);
+
+    // IN_WORLD is set by SMSG_LOGIN_VERIFY_WORLD itself; no world-entry callback is needed.
+    const bool done = pump(
+        options_.phaseSeconds, [this] { tick(); },
+        [this] {
+            const auto state = gameHandler_->getState();
+            return state == game::WorldState::IN_WORLD || state == game::WorldState::FAILED ||
+                   state == game::WorldState::DISCONNECTED;
+        });
+    if (!done) {
+        LOG_ERROR("Not in the world after ", options_.phaseSeconds, " s (world state ",
+                  game::worldStateName(gameHandler_->getState()), ")");
+        return kTimeout;
+    }
+    if (gameHandler_->getState() != game::WorldState::IN_WORLD) {
+        LOG_ERROR("World entry failed (world state ",
+                  game::worldStateName(gameHandler_->getState()), ")");
+        return kWorld;
+    }
+    LOG_WARNING("In the world as ", chosen.name);
+    observe();
+    return kOk;
+}
+
+// Logs chat lines and entity arrivals and departures until the run limit, or until the server
+// drops the connection (reported as a world failure by the caller's state check).
+void Client::observe() {
+    using Clock = std::chrono::steady_clock;
+    const auto end = Clock::now() + std::chrono::seconds(options_.runSeconds);
+
+    uint64_t lastChatUid = 0;
+    for (const auto& m : gameHandler_->getChatHistory()) lastChatUid = std::max(lastChatUid, m.uid);
+
+    struct Seen { game::ObjectType type; std::string name; };
+    std::unordered_map<uint64_t, Seen> known;
+    auto nextScan = Clock::now();
+
+    while (Clock::now() < end && gameHandler_->getState() == game::WorldState::IN_WORLD) {
+        tick();
+
+        for (const auto& m : gameHandler_->getChatHistory()) {
+            if (m.uid <= lastChatUid) continue;
+            lastChatUid = m.uid;
+            LOG_WARNING("[chat ", game::getChatTypeString(m.type), "] ",
+                        m.senderName.empty() ? "-" : m.senderName, ": ", m.message);
+        }
+
+        if (Clock::now() >= nextScan) {
+            nextScan = Clock::now() + std::chrono::milliseconds(500);
+            std::unordered_map<uint64_t, bool> present;
+            for (const auto& e : gameHandler_->getEntityManager().snapshotEntities()) {
+                present[e->getGuid()] = true;
+                auto it = known.find(e->getGuid());
+                std::string name;
+                if (auto* u = dynamic_cast<game::Unit*>(e.get())) name = u->getName();
+                if (it == known.end()) {
+                    known[e->getGuid()] = {e->getType(), name};
+                    LOG_WARNING("[entity +] type ", static_cast<int>(e->getType()), " guid ",
+                                e->getGuid(), name.empty() ? "" : " \"" + name + "\"", " at ",
+                                e->getX(), ",", e->getY(), ",", e->getZ());
+                } else if (it->second.name.empty() && !name.empty()) {
+                    it->second.name = name;  // names arrive in a later query response
+                    LOG_WARNING("[entity =] guid ", e->getGuid(), " is \"", name, "\"");
+                }
+            }
+            for (auto it = known.begin(); it != known.end();) {
+                if (!present.count(it->first)) {
+                    LOG_WARNING("[entity -] guid ", it->first);
+                    it = known.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    LOG_WARNING("Run finished: ", known.size(), " entities known, world state ",
+                game::worldStateName(gameHandler_->getState()));
 }
 
 void Client::shutdown() {

@@ -20,7 +20,7 @@ int main() {
         std::fprintf(stderr,
                      "wowee_headless: %s\n"
                      "Set WOWEE_HEADLESS_HOST, _ACCOUNT, _PASSWORD and _EXPANSION (and optionally\n"
-                     "_PORT, _REALM, _TIMEOUT, WOW_DATA_PATH, WOWEE_REALM_HOST_OVERRIDE).\n",
+                     "_PORT, _REALM, _TIMEOUT, _CHARACTER, _SECONDS, WOW_DATA_PATH, WOWEE_REALM_HOST_OVERRIDE).\n",
                      err.c_str());
         return kUsage;
     }
@@ -28,6 +28,7 @@ int main() {
     Client client(options);
     int rc = client.initialize();
     if (rc == kOk) rc = client.loginAndListCharacters();
+    if (rc == kOk) rc = client.enterWorldAndObserve();
     client.shutdown();
     if (rc != kOk) {
         std::fprintf(stderr, "wowee_headless: failed (exit code %d), see the log above\n", rc);
