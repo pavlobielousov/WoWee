@@ -41,6 +41,8 @@ struct Options {
     std::string dataRoot;      // where Data/expansions/<id>/ lives
     std::string installRoot;   // where this client's own tables are shipped ("Data")
     int phaseSeconds = 30;     // limit for each phase
+    int character = 0;         // index in the character list to enter the world as
+    int runSeconds = 20;       // how long to stay in the world, logging, before disconnecting
 };
 
 // Reads WOWEE_HEADLESS_{HOST,PORT,ACCOUNT,PASSWORD,EXPANSION,REALM,TIMEOUT} and WOW_DATA_PATH
@@ -59,6 +61,10 @@ public:
     // Connect, authenticate, receive the realm list, connect to the chosen realm's world server,
     // wait for the character list. kOk, kConnect, kAuth, kWorld or kTimeout.
     int loginAndListCharacters();
+    // Enters the world as options.character, waits for IN_WORLD, then logs new chat lines and
+    // entities appearing or leaving for options.runSeconds. kOk, kUsage (no such character),
+    // kWorld or kTimeout.
+    int enterWorldAndObserve();
     // Disconnects both sockets; safe to call twice.
     void shutdown();
 
@@ -69,6 +75,7 @@ private:
     int waitForRealmList();
     int connectWorld();
     int waitForCharacterList();
+    void observe();
     // Calls both handlers' update() once, with the seconds since the previous call.
     void tick();
 
