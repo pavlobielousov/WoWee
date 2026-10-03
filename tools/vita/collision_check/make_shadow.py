@@ -17,12 +17,13 @@ import sys
 
 TOKEN = re.compile(r'\b(Vk[A-Z]\w*|Vma\w*|VK_\w+|vk[A-Z_]\w*|vulkan\w*)\b|vulkan/|vk_mem_alloc|rendering/vk_|<vulkan')
 
-def strip(lines):
+def strip(lines, token=None):
+    tok = token or TOKEN
     out, i = [], 0
     while i < len(lines):
         line = lines[i]
         code = re.sub(r'//.*', '', line)
-        if TOKEN.search(code) or (line.lstrip().startswith('#include') and TOKEN.search(line)):
+        if tok.search(code) or (line.lstrip().startswith('#include') and tok.search(line)):
             # drop the whole declaration: until the braces balance and the statement ends, so a
             # dropped `struct X {` takes its body with it
             depth = 0
@@ -38,14 +39,24 @@ def strip(lines):
         i += 1
     return out
 
-args = sys.argv[1:]
-extra = []
-while '--drop' in args:
-    i = args.index('--drop')
-    extra.append(args[i + 1])
-    del args[i:i + 2]
-if extra:
-    TOKEN = re.compile(TOKEN.pattern + '|' + '|'.join(re.escape(e) for e in extra))
-src, dst = args[0], args[1]
-text = open(src).read().split('\n')
-open(dst, 'w').write('\n'.join(strip(text)))
+def make_token(extra):
+    base = r'\b(Vk[A-Z]\w*|Vma\w*|VK_\w+|vk[A-Z_]\w*|vulkan\w*)\b|vulkan/|vk_mem_alloc|rendering/vk_|<vulkan'
+    return re.compile(base + ''.join('|' + re.escape(e) for e in extra))
+
+
+def main():
+    args = sys.argv[1:]
+    extra = []
+    while '--drop' in args:
+        i = args.index('--drop')
+        extra.append(args[i + 1])
+        del args[i:i + 2]
+    token = make_token(extra)
+    src, dst = args[0], args[1]
+    text = open(src).read().split('\n')
+    open(dst, 'w').write('\n'.join(strip(text, token)))
+
+
+
+if __name__ == '__main__':
+    main()
