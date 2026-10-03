@@ -32,6 +32,22 @@ void run(Check&& check) {
     eq("normalize root", normalizeDevicePath("app0:"), "app0:/");
     eq("normalize leaves relative alone", normalizeDevicePath("../a"), "../a");
 
+    // VITA-41: fs::equivalent() says "same" for two different directories on the Vita.
+    chk("equivalent: same spelling", devicePathsEquivalent("ux0:data/a", "ux0:data/a", "app0:"));
+    chk("equivalent: other spellings of one dir",
+        devicePathsEquivalent("ux0:data/a", "ux0:/data/a/", "app0:") &&
+        devicePathsEquivalent("ux0:data/b/../a", "ux0:/data//./a", "app0:"));
+    chk("equivalent: ignores ASCII case (FAT)", devicePathsEquivalent("ux0:data/Addons", "ux0:data/addons", "app0:"));
+    chk("not equivalent: different dirs", !devicePathsEquivalent("ux0:data/d1", "ux0:data/d2", "app0:"));
+    chk("not equivalent: shared prefix", !devicePathsEquivalent("ux0:data/d1", "ux0:data/d10", "app0:"));
+    chk("not equivalent: parent and child", !devicePathsEquivalent("ux0:data", "ux0:data/d1", "app0:"));
+    chk("not equivalent: same path on two devices", !devicePathsEquivalent("ux0:data/a", "uma0:data/a", "app0:"));
+    chk("equivalent: relative path resolved against cwd",
+        devicePathsEquivalent("Data", "ux0:/data/wowee/Data", "ux0:/data/wowee") &&
+        devicePathsEquivalent("../addons", "ux0:/data/addons", "ux0:/data/wowee"));
+    chk("not equivalent: relative path against another cwd",
+        !devicePathsEquivalent("Data", "ux0:/data/wowee/Data", "app0:"));
+
     // opcode_table.cpp keys its inheritance-cycle check on this string: every spelling of one file
     // has to give one key.
     chk("one key per file",

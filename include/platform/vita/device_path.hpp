@@ -84,6 +84,40 @@ inline std::filesystem::path resolveDevicePath(const std::filesystem::path& p) {
     return std::filesystem::path(resolveDevicePath(p.string(), ec ? std::string_view{} : std::string_view(cwd)));
 }
 
+// Whether two paths name the same file or directory, answered from the paths alone (VITA-41).
+// std::filesystem::equivalent() answers true for two different existing directories here (the
+// Vita's stat does not fill device and inode), so syncClientTables would skip copying the client's
+// tables and extractionRoots would drop a root. Both paths are resolved against `cwd` and compared
+// without regard to ASCII case: the memory card is FAT/exFAT, which is case-insensitive (assumed,
+// not yet tried on hardware, VITA-34). Two spellings of one directory therefore agree, and a wrong
+// "same" can only skip a copy, never copy a file onto itself. There are no symlinks on these file
+// systems, which is what the lexical comparison relies on.
+inline bool devicePathsEquivalent(std::string_view a, std::string_view b, std::string_view cwd) {
+    const std::string ra = resolveDevicePath(a, cwd);
+    const std::string rb = resolveDevicePath(b, cwd);
+    if (ra.size() != rb.size()) return false;
+    for (std::size_t i = 0; i < ra.size(); ++i) {
+        const auto lower = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
+        if (lower(ra[i]) != lower(rb[i])) return false;
+    }
+    return true;
+}
+
+// The same as fs::equivalent(a, b, ec) for the callers that used it: false, with `ec` set, when
+// either path does not exist.
+inline bool pathsEquivalent(const std::filesystem::path& a, const std::filesystem::path& b,
+                            std::error_code& ec) {
+    namespace fs = std::filesystem;
+    ec.clear();
+    if (!fs::exists(a, ec) || !fs::exists(b, ec)) {
+        ec = std::make_error_code(std::errc::no_such_file_or_directory);
+        return false;
+    }
+    std::error_code cwdEc;
+    const std::string cwd = fs::current_path(cwdEc).string();
+    return devicePathsEquivalent(a.string(), b.string(), cwdEc ? std::string_view{} : std::string_view(cwd));
+}
+
 // Recursive delete that does not use remove_all(): entries are collected first, then removed
 // deepest first, then the root. Returns the number of entries removed; `ec` holds the first
 // error (and the walk stops there).

@@ -138,7 +138,12 @@ void AddonManager::scanAddons(const std::string& addonsPath) {
                     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                 }
                 if (name != "addons") continue;
+#if defined(__vita__)
+                // fs::equivalent says "same" for any two directories here (VITA-41)
+                if (platform::vita::pathsEquivalent(entry.path(), asked, ec)) continue;
+#else
                 if (fs::equivalent(entry.path(), asked, ec)) continue;
+#endif
                 roots.emplace_back(entry.path());
             }
         }

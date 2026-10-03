@@ -60,6 +60,7 @@
 #include <zlib.h>
 
 #include "devpath_cases.hpp"
+#include "core/data_paths.hpp"
 
 extern "C" {
 #include "lauxlib.h"
@@ -514,7 +515,31 @@ static void devpath() {
         bool same2 = fs::equivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:/data/wowee/depcheck_dp/d1/", ec);
         char b[200];
         snprintf(b, sizeof b, "different=%d(ec=%d) same=%d(ec=%d) same-other-spelling=%d", diff, e1, same, e2, same2);
-        check("devpath fs::equivalent distinguishes two dirs", !diff, b);
+        // Known bug (VITA-41): fs::equivalent is true for two different directories. This passes
+        // while it is, and fails the day it is fixed: then the workaround (core::samePath) can go.
+        check("devpath fs::equivalent still wrong, workaround needed (VITA-41)", diff, b);
+        // The helper the call sites use instead (VITA-41).
+        std::error_code pec;
+        const bool pDiff = pv::pathsEquivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:data/wowee/depcheck_dp/d2", pec);
+        const bool pSame = pv::pathsEquivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:data/wowee/depcheck_dp/d1", pec);
+        const bool pSame2 = pv::pathsEquivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:/data/wowee/depcheck_dp/d1/", pec);
+        const bool pCase = pv::pathsEquivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:data/WOWEE/depcheck_dp/D1", pec);
+        const bool pMissing = pv::pathsEquivalent("ux0:data/wowee/depcheck_dp/d1", "ux0:data/wowee/depcheck_dp/nope", pec);
+        snprintf(b, sizeof b, "different=%d same=%d other-spelling=%d other-case=%d missing=%d", pDiff, pSame, pSame2, pCase, pMissing);
+        check("devpath pathsEquivalent (two dirs differ, spellings agree)", !pDiff && pSame && pSame2 && pCase && !pMissing, b);
+
+        // The call site that mattered: syncClientTables must copy into a separate data root.
+        fs::create_directories("ux0:data/wowee/depcheck_dp/install/expansions/x", ec);
+        fs::create_directories("ux0:data/wowee/depcheck_dp/dataroot/expansions/x", ec);
+        { std::ofstream("ux0:data/wowee/depcheck_dp/install/expansions/x/expansion.json") << "{\"id\":\"x\"}"; }
+        { std::ofstream("ux0:data/wowee/depcheck_dp/dataroot/expansions/x/manifest.json") << "{}"; }
+        const int copied = wowee::core::syncClientTables("ux0:data/wowee/depcheck_dp/install", "ux0:data/wowee/depcheck_dp/dataroot");
+        std::string got;
+        { std::ifstream in("ux0:data/wowee/depcheck_dp/dataroot/expansions/x/expansion.json"); std::getline(in, got); }
+        const int again = wowee::core::syncClientTables("ux0:data/wowee/depcheck_dp/install", "ux0:data/wowee/depcheck_dp/dataroot");
+        const int sameRoot = wowee::core::syncClientTables("ux0:data/wowee/depcheck_dp/install", "ux0:/data/wowee/depcheck_dp/install/");
+        snprintf(b, sizeof b, "copied=%d content='%s' again=%d same-root=%d", copied, got.c_str(), again, sameRoot);
+        check("devpath syncClientTables copies into a separate data root", copied == 1 && got == "{\"id\":\"x\"}" && again == 0 && sameRoot == 0, b);
         ec.clear();
     }
 
