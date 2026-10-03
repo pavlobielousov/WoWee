@@ -200,6 +200,7 @@ int Client::connectAuth() {
 
 int Client::waitForRealmList() {
     bool needsMore = false;
+    bool requested = false;
     const bool done = pump(
         options_.phaseSeconds, [this] { tick(); },
         [&] {
@@ -208,6 +209,11 @@ int Client::waitForRealmList() {
                 state == auth::AuthState::AUTHENTICATOR_REQUIRED) {
                 needsMore = true;
                 return true;
+            }
+            // The realm screen asks for the list once login has succeeded; nothing else does.
+            if (state == auth::AuthState::AUTHENTICATED && !requested) {
+                requested = true;
+                authHandler_.requestRealmList();
             }
             return state == auth::AuthState::REALM_LIST_RECEIVED ||
                    state == auth::AuthState::FAILED;

@@ -449,7 +449,7 @@ treats as "no module". `memory_monitor.cpp` has a Vita arm (its "total RAM" is t
   10 GB and 8 CPUs** (Apple's default 1 GB thrashed and never finished); eight parallel `-O2 -g` compiles of the game sources were killed for
   memory even then, hence `JOBS=5`.
 
-## 15. wowee_headless: the console client (VITA-48) *(desktop: failure paths verified, live login pending a test server; Vita build is PR 3)*
+## 15. wowee_headless: the console client (VITA-48) *(desktop: verified against a LAN AzerothCore; Vita build is PR 3)*
 
 `wowee_headless` (`tools/headless/`, fork-only) is a console program that uses only `wowee_core`. It does by hand what `Application` and the
 login, realm and character screens do: sync and load the expansion tables (`syncClientTables`, `ExpansionRegistry`, opcode and update-field
@@ -485,4 +485,9 @@ failed (auth or world), 5 login refused / PIN or authenticator needed / bad sess
 timed out. Each prints an `[ERROR]` line before the code.
 
 **Verified (desktop container, 2026-10-03):** closed port (`127.0.0.1:1`) exit 4 "Connection refused"; unknown expansion `nope` exit 3;
-`WOW_DATA_PATH` of an empty directory exit 3; no options exit 2. A live login needs a test server (`docs/server-setup.md`); not done yet.
+`WOW_DATA_PATH` of an empty directory exit 3; no options exit 2. Live (LAN AzerothCore 3.3.5a, `wotlk`, 2026-10-03): auth with protocol 8, realm list, world login and character list all work (exit 0; the
+account had no characters). The auth handler does not ask for the realm list by itself after login (the realm screen does), so the driver
+sends `requestRealmList()` once the state is `AUTHENTICATED`. With no `AssetManager` (`services.assetManager` null) the handler ran
+through world auth and the character list without a crash. Warden: the server's module is refused on Linux ("Cannot execute Windows x86
+code"), the server did not drop the connection in the few seconds this ran. `WOWEE_LOG_LEVEL=debug` shows the packet-level log.
+`WOWEE_REALM_HOST_OVERRIDE` was not needed here (the realm advertises the LAN address).
