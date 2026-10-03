@@ -1,6 +1,7 @@
-#if !defined(__vita__)
+#if !defined(__vita__) || defined(WOWEE_VITA_CLIENT)
 #include "core/application.hpp"
-#else
+#endif
+#if defined(__vita__)
 #include "platform/vita/vita_platform.hpp"
 #endif
 #include "core/config_paths.hpp"
@@ -258,9 +259,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[]) {
         // Seed portable config from the per-user location on first portable launch.
         wowee::core::migratePortableConfigIfNeeded();
 
-#ifdef __vita__
-        // The Application needs the Vulkan renderer, which the Vita build cannot link yet
-        // (VITA-9, VITA-12): stop after the startup path and say what it resolved.
+#if defined(__vita__) && !defined(WOWEE_VITA_CLIENT)
+        // The wowee target is the startup-path stub: stop after it and say what it resolved.
+        // wowee_client (cmake/vita/wowee_client.cmake, VITA-52) runs the Application below.
         wowee::platform::vita::logStartupReport();
 #else
         wowee::core::Application app;
