@@ -79,3 +79,12 @@ So you can look first where it matters. Everything below is **meant to look and 
 
 The PR description lists, per file, what changed and why.
 
+## 4. Result (2026-10-04, macOS arm64, MoltenVK, vsync-capped at about 57 fps)
+
+Screens: all looked as before (checked by hand on the login, character select and world screens and the panels in section 1).
+Frame time, baseline `7916589a` against the VITA-12 branch, one 60 s run each, `compare_frame_profile.py`: **within tolerance in all four scenes**.
+Whole frame: login 17.60 -> 17.60 ms, charselect 17.57 -> 17.56, world 17.71 -> 17.83 (+0.7 %), world-ui 17.81 -> 17.84 (+0.2 %).
+The largest per-stage change was `endFrame` in `world` (+5.3 %), and the same stage was -5.2 % in `world-ui`, so it is noise.
+Not done: a second run of each build (the checklist asks for two before believing a flag; nothing was flagged). The whole-frame number is
+limited by vsync, so the per-stage rows are the evidence.
+
