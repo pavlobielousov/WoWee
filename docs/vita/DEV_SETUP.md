@@ -510,9 +510,11 @@ to `wowee.vpk`. The target is in `cmake/vita/Vita.cmake` (links `wowee_core` + `
 `[entity]` lines are log lines, there is no console. **Trap:** `vita_create_vpk` is a macro that keeps its `-a` file list and title ID in variables
 across calls, so a second VPK in one project inherits the first one's files (a duplicate `icon0.png` error); `Vita.cmake` unsets them between calls.
 
-Vita3K smoke test (2026-10-03): `tools/vita/vita3k_macos.sh build-vita/wowee_headless.vpk WOWH00001 --seconds 40` with a test `env.txt` (delete it afterwards; it holds
-credentials). It starts, finds the four expansions in `app0:Data`, loads 1306 opcodes, 79 update fields and 40 DBC layouts for `wotlk`, and
-tries to connect. **The connect fails in the emulator:** `Host is unreachable` for the LAN server (which the Mac itself reaches), `No data` for
-`127.0.0.1`, so Vita3K's network emulation does not get as far as the server (a likely cause is macOS "Local Network" permission for
-Vita3K.app, unconfirmed). It reports the error clearly and exits. Login, realm list and world entry on the Vita need the real device over
-Wi-Fi: a task on VITA-34, to be run by the user.
+Vita3K smoke test (2026-10-03): `tools/vita/vita3k_macos.sh build-vita/wowee_headless.vpk WOWH00001 --seconds 45` with a test `env.txt` in
+`<pref-path>/ux0/data/wowee/` (delete it afterwards; it holds credentials). **Verified against the LAN AzerothCore:** it finds the four
+expansions in `app0:Data`, loads the wotlk tables (1306 opcodes, 79 update fields, 40 DBC layouts), authenticates, receives the realm list, passes world
+auth, lists the character, enters the world as `Vitatester`, logs the MOTD and channel joins and about 95 creatures, and disconnects cleanly after
+`WOWEE_HEADLESS_SECONDS`. Warden's module load fails (the Vita stub refuses by design) and the server did not drop the connection. **Trap:** the first run
+failed with `Host is unreachable` (and `No data` for 127.0.0.1): macOS asks Vita3K.app for "Local Network" permission on the first LAN connection,
+and until it is granted (System Settings, Privacy & Security, Local Network) the emulator cannot reach any LAN host. Vita3K proves the code path,
+not Wi-Fi, speed or memory: the real-device run is a VITA-34 task.
