@@ -3,7 +3,6 @@
 #include <string>
 #include <memory>
 #include <SDL3/SDL.h>
-#include <vulkan/vulkan.h>
 
 namespace wowee {
 namespace rendering { class VkContext; }
