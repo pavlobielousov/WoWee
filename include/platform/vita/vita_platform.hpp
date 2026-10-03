@@ -40,4 +40,12 @@ void sendLogLine(const std::string& line);
 // built (VITA-9, VITA-12).
 void logStartupReport();
 
+// The threads that have called core::enterThread so far (id and role name), up to `max`; returns
+// how many. For the CPU statistics of a long run (tools/headless/run_stats.hpp, VITA-7).
+struct RegisteredThread {
+    int tid;
+    const char* roleName;
+};
+size_t registeredThreads(RegisteredThread* out, size_t max);
+
 }  // namespace wowee::platform::vita

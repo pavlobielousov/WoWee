@@ -11,12 +11,18 @@
 
 #include <csignal>
 #include <cstdio>
+#include <filesystem>
 
 int main() {
 #ifdef __vita__
     // Heap, stack, sceNet, ux0:data/wowee and env.txt (the Vita has no command line or shell
     // environment, so every setting comes from ux0:data/wowee/env.txt). Before the logger.
     wowee::platform::vita::initProcess();
+    // The working directory at launch is the read-only app0:. Code with a relative path of its own
+    // (Warden's ./warden_cache) died with "Permission denied" on every hardware run; ux0:data/wowee
+    // is writable, and this program opens nothing relative that the VPK ships.
+    std::error_code ec;
+    std::filesystem::current_path(wowee::platform::vita::kAppDir, ec);
 #endif
 #if !defined(_WIN32) && !defined(__vita__)
     // A server that drops the connection must not kill the driver with SIGPIPE.

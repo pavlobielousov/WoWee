@@ -42,6 +42,7 @@ struct Options {
     std::string installRoot;   // where this client's own tables are shipped ("Data")
     int phaseSeconds = 30;     // limit for each phase
     int character = 0;         // index in the character list to enter the world as
+    int statsSeconds = 30;     // how often the resource line is logged while in the world
     int runSeconds = 20;       // how long to stay in the world, logging, before disconnecting
 };
 

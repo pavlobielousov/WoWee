@@ -3,11 +3,13 @@
 #include "core/thread_budget.hpp"
 
 #include "core/logger.hpp"
+#include "platform/vita/vita_platform.hpp"
 
 #include <psp2/kernel/threadmgr.h>
 
 #include <pthread.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 
@@ -56,6 +58,15 @@ const RoleLayout* find(ThreadRole role) {
 constexpr int kRoleCount = sizeof(kLayout) / sizeof(kLayout[0]);
 std::atomic<bool> g_logged[kRoleCount];
 
+// Every thread that called enterThread, for the CPU statistics of a long run (tools/headless).
+constexpr size_t kMaxRegistered = 32;
+struct Registered {
+    std::atomic<SceUID> tid{0};
+    std::atomic<int> role{-1};
+};
+Registered g_registered[kMaxRegistered];
+std::atomic<size_t> g_registeredCount{0};
+
 }  // namespace
 
 size_t workerCount(ThreadRole role, size_t /*desktopValue*/) {
@@ -68,6 +79,11 @@ void enterThread(ThreadRole role) {
     if (!l) return;
 
     const SceUID tid = sceKernelGetThreadId();
+    if (const size_t slot = g_registeredCount.fetch_add(1, std::memory_order_acq_rel);
+        slot < kMaxRegistered) {
+        g_registered[slot].role.store(static_cast<int>(l - kLayout), std::memory_order_relaxed);
+        g_registered[slot].tid.store(tid, std::memory_order_release);
+    }
     const int affinityResult = sceKernelChangeThreadCpuAffinityMask(tid, l->cpuMask);
     int priorityResult = 0;
     if (l->priority != 0) priorityResult = sceKernelChangeThreadPriority(tid, l->priority);
@@ -90,6 +106,19 @@ void enterThread(ThreadRole role) {
                     static_cast<unsigned>(affinityResult), " priority result 0x",
                     static_cast<unsigned>(priorityResult), std::dec);
     }
+}
+
+size_t registeredThreads(RegisteredThread* out, size_t max) {
+    const size_t count = std::min(g_registeredCount.load(std::memory_order_acquire), kMaxRegistered);
+    size_t n = 0;
+    for (size_t i = 0; i < count && n < max; ++i) {
+        const SceUID tid = g_registered[i].tid.load(std::memory_order_acquire);
+        if (tid == 0) continue;  // slot claimed, not yet filled in
+        out[n].tid = tid;
+        out[n].roleName = kLayout[g_registered[i].role.load(std::memory_order_relaxed)].name;
+        ++n;
+    }
+    return n;
 }
 
 }  // namespace wowee::platform::vita
