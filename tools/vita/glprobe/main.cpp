@@ -1,7 +1,8 @@
 // GlProbe (VITA-13): answers, on Vita3K now and on a real Vita later, the vitaGL questions ADR-001
 // leaves open, with PASS/FAIL lines in ux0:data/wowee/glprobe.log. Uses only the fixed-function
-// pipeline (vitaGL has built-in shaders for it, so no libshacccg.suprx is needed); the GLES2 shader
-// path of the ImGui backend is a separate probe because it needs the run-time shader compiler.
+// pipeline for the first tests. NOTE (corrected 2026-10-03): vitaGL's fixed-function path still compiles a generated
+// shader at run time for every new combination of GL state (and caches it in ux0:data/shader_cache), so it needs
+// the shader compiler (libshacccg.suprx) as much as GLSL does, unless the cache already holds the combination.
 //
 //   1. context and memory pools (vglInitExtended, vglMemFree/Total)
 //   2. clear colour read back with glReadPixels
@@ -499,6 +500,44 @@ static GLuint solid_texture(uint8_t r, uint8_t g, uint8_t b) {
     return t;
 }
 
+// Draws a full-screen quad with the terrain program (base red, layer blue, alpha map 0.5, light 1, fog about 0.002)
+// and checks the pixel: about (128, 0, 128).
+static bool draw_terrain_and_check(GLuint terrain, char* detail, size_t detailSize) {
+    GLuint base = solid_texture(255, 0, 0), l1 = solid_texture(0, 0, 255), alpha = solid_texture(128, 128, 128);
+    glClearColor(0.2f, 0.2f, 0.2f, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glViewport(0, 0, 960, 544);
+    glUseProgram(terrain);
+    const GLfloat id[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    glUniformMatrix4fv(glGetUniformLocation(terrain, "uMVP"), 1, GL_FALSE, id);
+    glUniform3f(glGetUniformLocation(terrain, "uLightDir"), 0, 0, 1);
+    glUniform3f(glGetUniformLocation(terrain, "uFogColor"), 0.5f, 0.5f, 0.5f);
+    const GLuint tex[3] = {base, l1, alpha};
+    static const char* names[3] = {"uBase", "uLayer1", "uAlpha1"};
+    for (int i = 0; i < 3; i++) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, tex[i]);
+        glUniform1i(glGetUniformLocation(terrain, names[i]), i);
+    }
+    const GLfloat pos[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 0};
+    const GLfloat uv[] = {0, 0, 1, 0, 0, 1, 1, 1};
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, pos);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glActiveTexture(GL_TEXTURE0);
+    Rgba got = read_px(480, 272, 544);
+    fmt_rgba(detail, detailSize, got, 128, 0, 128);
+    glUseProgram(0);
+    glDeleteTextures(1, &base);
+    glDeleteTextures(1, &l1);
+    glDeleteTextures(1, &alpha);
+    return near_rgb(got, 128, 0, 128, 24);
+}
+
 static void test_shaders() {
     char d[200];
     double msTerrain = 0, msM2 = 0, msAgain = 0;
@@ -511,40 +550,8 @@ static void test_shaders() {
     check("same source compiled again", again != 0, d);
 
     if (terrain) {
-        GLuint base = solid_texture(255, 0, 0), l1 = solid_texture(0, 0, 255), alpha = solid_texture(128, 128, 128);
-        glClearColor(0.2f, 0.2f, 0.2f, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glViewport(0, 0, 960, 544);
-        glUseProgram(terrain);
-        const GLfloat id[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        glUniformMatrix4fv(glGetUniformLocation(terrain, "uMVP"), 1, GL_FALSE, id);
-        glUniform3f(glGetUniformLocation(terrain, "uLightDir"), 0, 0, 1);
-        glUniform3f(glGetUniformLocation(terrain, "uFogColor"), 0.5f, 0.5f, 0.5f);
-        const GLuint tex[3] = {base, l1, alpha};
-        static const char* names[3] = {"uBase", "uLayer1", "uAlpha1"};
-        for (int i = 0; i < 3; i++) {
-            glActiveTexture(GL_TEXTURE0 + i);
-            glBindTexture(GL_TEXTURE_2D, tex[i]);
-            glUniform1i(glGetUniformLocation(terrain, names[i]), i);
-        }
-        const GLfloat pos[] = {-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 0};
-        const GLfloat uv[] = {0, 0, 1, 0, 0, 1, 1, 1};
-        glEnableVertexAttribArray(0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, pos);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        glDisableVertexAttribArray(0);
-        glDisableVertexAttribArray(1);
-        glActiveTexture(GL_TEXTURE0);
-        // base red, layer blue, alpha map 0.5, light 1, fog about 0.002: about (127, 0, 127)
-        Rgba got = read_px(480, 272, 544);
-        fmt_rgba(d, sizeof d, got, 128, 0, 128);
-        check("terrain shader draws: mix(red, blue, 0.5 alpha map) with light and fog", near_rgb(got, 128, 0, 128, 24), d);
-        glUseProgram(0);
-        glDeleteTextures(1, &base);
-        glDeleteTextures(1, &l1);
-        glDeleteTextures(1, &alpha);
+        const bool ok = draw_terrain_and_check(terrain, d, sizeof d);
+        check("terrain shader draws: mix(red, blue, 0.5 alpha map) with light and fog", ok, d);
     }
 
     // The stock GLES2 ImGui backend: it builds its own shaders at the first frame.
@@ -578,6 +585,140 @@ static void test_shaders() {
         ImGui_ImplOpenGL3_Shutdown();
     }
     ImGui::DestroyContext();
+}
+
+// ---- precompiled shaders: glShaderBinary (mask 256) ----------------------------------------------------------------
+// First run (no files): compile the terrain program from source, dump both shaders with vglGetShaderBinary into
+// ux0:data/wowee/gxp/, then load them back from memory and time it. Later runs (files present): load them straight from
+// the files in a fresh process, before any GLSL is compiled, and time read, glShaderBinary and link separately.
+static bool read_whole_file(const char* path, uint8_t** out, int* size) {
+    SceUID fd = sceIoOpen(path, SCE_O_RDONLY, 0);
+    if (fd < 0) return false;
+    const int sz = static_cast<int>(sceIoLseek(fd, 0, SCE_SEEK_END));
+    sceIoLseek(fd, 0, SCE_SEEK_SET);
+    uint8_t* buf = static_cast<uint8_t*>(malloc(sz));
+    const int got = sceIoRead(fd, buf, sz);
+    sceIoClose(fd);
+    if (got != sz) { free(buf); return false; }
+    *out = buf;
+    *size = sz;
+    return true;
+}
+
+static void write_whole_file(const char* path, const void* data, int size) {
+    SceUID fd = sceIoOpen(path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0777);
+    if (fd < 0) return;
+    sceIoWrite(fd, data, size);
+    sceIoClose(fd);
+}
+
+static GLuint link_from_binaries(const uint8_t* vb, int vlen, const uint8_t* fb, int flen, double* msBinary,
+                                 double* msLink) {
+    const uint64_t t0 = sceKernelGetProcessTimeWide();
+    GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderBinary(1, &v, 0, vb, vlen);
+    glShaderBinary(1, &f, 0, fb, flen);
+    const uint64_t t1 = sceKernelGetProcessTimeWide();
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, v);
+    glAttachShader(prog, f);
+    glBindAttribLocation(prog, 0, "aPos");
+    glBindAttribLocation(prog, 1, "aUV");
+    glLinkProgram(prog);
+    const uint64_t t2 = sceKernelGetProcessTimeWide();
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    *msBinary = (t1 - t0) / 1000.0;
+    *msLink = (t2 - t1) / 1000.0;
+    return ok ? prog : 0;
+}
+
+static void test_binary_shaders() {
+    char d[200];
+    sceIoMkdir(DIR_PATH "/gxp", 0777);
+    const char* kV = DIR_PATH "/gxp/terrain.vert.bin";
+    const char* kF = DIR_PATH "/gxp/terrain.frag.bin";
+    uint8_t *vb = nullptr, *fb = nullptr;
+    int vlen = 0, flen = 0;
+    const uint64_t r0 = sceKernelGetProcessTimeWide();
+    const bool haveFiles = read_whole_file(kV, &vb, &vlen) && read_whole_file(kF, &fb, &flen);
+    const double msRead = (sceKernelGetProcessTimeWide() - r0) / 1000.0;
+    if (!haveFiles) {
+        log_line("INFO no binaries yet: compiling from source, dumping with vglGetShaderBinary");
+        double ms = 0;
+        GLuint v = compile_shader(GL_VERTEX_SHADER, kTerrainVS, &ms, "terrain vs");
+        GLuint f = compile_shader(GL_FRAGMENT_SHADER, kTerrainFS, &ms, "terrain fs");
+        GLuint prog = glCreateProgram();
+        glAttachShader(prog, v);
+        glAttachShader(prog, f);
+        glBindAttribLocation(prog, 0, "aPos");
+        glBindAttribLocation(prog, 1, "aUV");
+        const uint64_t t0 = sceKernelGetProcessTimeWide();
+        glLinkProgram(prog);
+        log_line("INFO source path: link (compiles) %.1f ms", (sceKernelGetProcessTimeWide() - t0) / 1000.0);
+        vb = static_cast<uint8_t*>(malloc(65536));
+        fb = static_cast<uint8_t*>(malloc(65536));
+        GLsizei lv = 0, lf = 0;
+        vglGetShaderBinary(v, 65536, &lv, vb);
+        vglGetShaderBinary(f, 65536, &lf, fb);
+        vlen = lv;
+        flen = lf;
+        snprintf(d, sizeof d, "vertex %d bytes, fragment %d bytes", vlen, flen);
+        check("shaders dumped with vglGetShaderBinary", vlen > 0 && flen > 0, d);
+        write_whole_file(kV, vb, vlen);
+        write_whole_file(kF, fb, flen);
+    } else {
+        snprintf(d, sizeof d, "vertex %d bytes, fragment %d bytes, read in %.1f ms", vlen, flen, msRead);
+        log_line("INFO binaries found: %s", d);
+    }
+    double msBin = 0, msLink = 0;
+    GLuint prog = link_from_binaries(vb, vlen, fb, flen, &msBin, &msLink);
+    snprintf(d, sizeof d, "glShaderBinary x2 %.2f ms, link %.2f ms%s", msBin, msLink,
+             haveFiles ? " (fresh process, no GLSL compiled yet)" : " (same process)");
+    check("terrain program links from binaries", prog != 0, d);
+    if (prog) {
+        const bool ok = draw_terrain_and_check(prog, d, sizeof d);
+        check("terrain program from binaries draws the right colour", ok, d);
+    }
+    free(vb);
+    free(fb);
+}
+
+// ---- first use of fixed-function state combinations (mask 512) ------------------------------------------------------
+// vitaGL's fixed-function path generates a shader for every new combination of GL state, compiles it at run time and
+// caches the result in ux0:data/shader_cache/v*/ by a hash of the state. This times the FIRST draw of combinations the
+// device probably has not seen, then the second draw. Run it twice: the first run pays the compile, the second reads the
+// cache.
+static void ffp_first_use(const char* name, void (*setup)(), void (*teardown)()) {
+    GLuint t = solid_texture(200, 100, 50);
+    glClearColor(0.1f, 0.1f, 0.1f, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    set_ortho(960, 544);
+    uint64_t first = 0, second = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        const uint64_t t0 = sceKernelGetProcessTimeWide();
+        setup();
+        draw_quad(t, 100, 100, 64, 64);
+        glFinish();
+        (pass == 0 ? first : second) = sceKernelGetProcessTimeWide() - t0;
+        teardown();
+    }
+    log_line("INFO ffp %-34s first draw %7.1f ms, second %6.2f ms", name, first / 1000.0, second / 1000.0);
+    glDeleteTextures(1, &t);
+}
+
+static void test_ffp_first_use() {
+    ffp_first_use("texture, nothing else", [] {}, [] {});
+    ffp_first_use("texture + alpha blend", [] { glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); },
+                  [] { glDisable(GL_BLEND); });
+    ffp_first_use("texture + alpha test", [] { glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER, 0.5f); },
+                  [] { glDisable(GL_ALPHA_TEST); });
+    ffp_first_use("texture + linear fog", [] { glEnable(GL_FOG); glFogi(GL_FOG_MODE, GL_LINEAR); glFogf(GL_FOG_START, 0.0f); glFogf(GL_FOG_END, 10.0f); },
+                  [] { glDisable(GL_FOG); });
+    ffp_first_use("texture + lighting (1 light)", [] { glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); },
+                  [] { glDisable(GL_LIGHT0); glDisable(GL_LIGHTING); });
+    ffp_first_use("texture + modulate env + fog + blend", [] { glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glEnable(GL_FOG); glFogi(GL_FOG_MODE, GL_EXP2); glFogf(GL_FOG_DENSITY, 0.01f); },
+                  [] { glDisable(GL_FOG); glDisable(GL_BLEND); });
 }
 
 static void test_fbo_scale() {
@@ -737,7 +878,7 @@ static void test_imgui() {
 }
 
 // ux0:data/wowee/glprobe.mask (hex) selects what runs, to bisect a crash: 1 clear read-back, 2 DXT, 4 FBO,
-// 8 ImGui, 16 frame loop, 32 DXT3/DXT5 variants (diagnostic), 64 draw-call cost, 128 shader path (run-time compile, stock GLES2 ImGui). Missing or unreadable: 31.
+// 8 ImGui, 16 frame loop, 32 DXT3/DXT5 variants (diagnostic), 64 draw-call cost, 128 shader path (run-time compile, stock GLES2 ImGui), 256 precompiled shaders (glShaderBinary), 512 first use of fixed-function state combinations. Missing or unreadable: 31.
 static unsigned read_mask() {
     unsigned mask = 31;
     SceUID fd = sceIoOpen(DIR_PATH "/glprobe.mask", SCE_O_RDONLY, 0);
@@ -839,6 +980,8 @@ int main() {
     if (mask & 32) test_dxt_variants();
     if (mask & 64) test_draw_cost();
     if (mask & 128) test_shaders();
+    if (mask & 256) test_binary_shaders();
+    if (mask & 512) test_ffp_first_use();
     if (mask & 4) test_fbo_scale();
     if (mask & 8) test_imgui();
 
