@@ -197,10 +197,88 @@ static void test_dxt() {
     draw_quad(t5, 100, 100, 64, 64);
     Rgba g5 = read_px(148, 116, 544);
     fmt_rgba(d, sizeof d, g5, 0, 255, 0);
-    check("DXT5 block green (colour part)", near_rgb(g5, 0, 255, 0, 12), d);
+    // Deterministic on the device: this exact order (a DXT5 texture created right after a mipmapped DXT1 texture was
+    // drawn) samples as (0,0,0,0), while every DXT5 case in isolation passes (mask 32). A vitaGL state quirk; see
+    // docs/vita/DEV_SETUP.md section 19.
+    check("DXT5 block green (right after a mipmapped DXT1 draw; see mask 32 for DXT5 alone)", near_rgb(g5, 0, 255, 0, 12), d);
 
     glDeleteTextures(1, &t1);
     glDeleteTextures(1, &t5);
+}
+
+// DXT3/DXT5 variants (diagnostic, mask 32): DXT5 at 4x4, 8x8 and 16x16, DXT3 at 8x8, every block read back.
+// Alpha blocks are written as fully opaque; the colour blocks are red, green, blue, white in block order.
+static void upload_and_probe_dxt(const char* name, GLenum fmt, int size, bool dxt5, GLenum wrap = GL_CLAMP_TO_EDGE) {
+    char d[200];
+    const int blocks = (size / 4) * (size / 4);
+    const bool dxt1 = (fmt == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT);
+    const int blockBytes = dxt1 ? 8 : 16;  // DXT1 has no alpha block
+    uint8_t* data = static_cast<uint8_t*>(calloc(blocks, blockBytes));
+    static const uint16_t cols[4] = {RED565, GREEN565, BLUE565, WHITE565};
+    for (int b = 0; b < blocks; b++) {
+        uint8_t* p = data + b * blockBytes;
+        if (dxt1) {
+            dxt_color_block(p, cols[b % 4]);
+            continue;
+        }
+        if (dxt5) {
+            p[0] = 255; p[1] = 255;                       // alpha0 = alpha1 = 255, every index 0
+        } else {
+            memset(p, 0xFF, 8);                           // DXT3: 4 bit alpha 15 for all 16 texels
+        }
+        dxt_color_block(p + 8, cols[b % 4]);
+    }
+    GLuint t = 0;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    glCompressedTexImage2D(GL_TEXTURE_2D, 0, fmt, size, size, 0, blocks * blockBytes, data);
+    const GLenum err = glGetError();
+    glClearColor(0.2f, 0.2f, 0.2f, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    set_ortho(960, 544);
+    const float px = 8.0f * 4;  // each 4x4 block is 32x32 pixels on screen... for size 8; scaled below
+    (void)px;
+    const float quad = 64.0f;
+    draw_quad(t, 100, 100, quad, quad);
+    // sample the centre of the first four blocks in row-major order (a 4x4 texture has just one block)
+    const int perRow = size / 4;
+    char colours[160] = {0};
+    int ok = 0;
+    for (int b = 0; b < 4 && b < blocks; b++) {
+        const int bx = b % perRow, by = b / perRow;
+        const float cx = 100 + (bx + 0.5f) * (quad / perRow);
+        const float cy = 100 + (by + 0.5f) * (quad / perRow);
+        Rgba got = read_px(static_cast<int>(cx), static_cast<int>(cy), 544);
+        char one[40];
+        snprintf(one, sizeof one, "(%d,%d,%d,%d) ", got.r, got.g, got.b, got.a);
+        strncat(colours, one, sizeof colours - strlen(colours) - 1);
+        static const int want[4][3] = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255}};
+        if (near_rgb(got, want[b % 4][0], want[b % 4][1], want[b % 4][2], 12)) ok++;
+    }
+    snprintf(d, sizeof d, "err=0x%x blocks read %s", err, colours);
+    check(name, err == GL_NO_ERROR && ok == (blocks < 4 ? blocks : 4), d);
+    glDeleteTextures(1, &t);
+    free(data);
+}
+
+static void test_dxt_variants() {
+    upload_and_probe_dxt("DXT5 4x4 (one block)", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 4, true);
+    upload_and_probe_dxt("DXT5 8x8", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 8, true);
+    upload_and_probe_dxt("DXT5 16x16", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 16, true);
+    upload_and_probe_dxt("DXT5 64x64", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 64, true);
+    upload_and_probe_dxt("DXT3 8x8", 0x83F2 /* GL_COMPRESSED_RGBA_S3TC_DXT3_EXT */, 8, false);
+    upload_and_probe_dxt("DXT3 16x16", 0x83F2, 16, false);
+    upload_and_probe_dxt("DXT1 16x16 (control)", GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, 16, false);
+    // wrap modes: WoW's terrain and most models repeat; the first DXT5 test left the default (GL_REPEAT)
+    upload_and_probe_dxt("DXT5 8x8 GL_REPEAT", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 8, true, GL_REPEAT);
+    upload_and_probe_dxt("DXT5 64x64 GL_REPEAT", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 64, true, GL_REPEAT);
+    upload_and_probe_dxt("DXT3 8x8 GL_REPEAT", 0x83F2, 8, false, GL_REPEAT);
+    upload_and_probe_dxt("DXT1 8x8 GL_REPEAT", GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, 8, false, GL_REPEAT);
+    upload_and_probe_dxt("DXT5 8x8 GL_MIRRORED_REPEAT", GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 8, true, GL_MIRRORED_REPEAT);
 }
 
 static void test_fbo_scale() {
@@ -360,7 +438,7 @@ static void test_imgui() {
 }
 
 // ux0:data/wowee/glprobe.mask (hex) selects what runs, to bisect a crash: 1 clear read-back, 2 DXT, 4 FBO,
-// 8 ImGui, 16 frame loop. Missing or unreadable: everything.
+// 8 ImGui, 16 frame loop, 32 DXT3/DXT5 variants (diagnostic). Missing or unreadable: 31 (everything but 32).
 static unsigned read_mask() {
     unsigned mask = 31;
     SceUID fd = sceIoOpen(DIR_PATH "/glprobe.mask", SCE_O_RDONLY, 0);
@@ -408,10 +486,18 @@ int main() {
     char d[160];
     vglSetupRuntimeShaderCompiler(SHARK_OPT_DEFAULT, 0, 0, 0);
     const unsigned initMode = read_init_mode();
-    GLboolean ok = init_vgl(initMode);
-    snprintf(d, sizeof d, "init mode %u", initMode);
-    check("vitaGL init (960x544)", ok == GL_TRUE, d);
-    if (ok != GL_TRUE) { log_line("INFO glprobe aborted"); return 1; }
+    // vglInit* returns GL_TRUE ONLY WHEN THE REQUESTED RESOLUTION HAD TO BE LOWERED ("res_fallback" in vitaGL's
+    // vgl.c) and GL_FALSE on a normal success, so the return value says nothing about whether init worked.
+    // The first version of this probe read it as success and aborted (VITA-13); state is checked instead.
+    const GLboolean resFallback = init_vgl(initMode);
+    snprintf(d, sizeof d, "init mode %u returned %d (GL_TRUE means the resolution fell back)", initMode,
+             static_cast<int>(resFallback));
+    log_line("INFO %s", d);
+    const bool inited = vglMemTotal(VGL_MEM_VRAM) > 0 && glGetString(GL_VERSION) != nullptr;
+    snprintf(d, sizeof d, "CDRAM total %llu KB", static_cast<unsigned long long>(vglMemTotal(VGL_MEM_VRAM) / 1024));
+    check("vitaGL is initialised (pools exist, GL_VERSION answers)", inited, d);
+    check("960x544 was available (no resolution fallback)", resFallback == GL_FALSE, nullptr);
+    if (!inited) { log_line("INFO glprobe aborted"); return 1; }
 
     const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
     const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
@@ -424,8 +510,9 @@ int main() {
           ext && strstr(ext, "texture_compression_s3tc") != nullptr, nullptr);
     static const char* kMemNames[] = {"CDRAM", "RAM", "PHYCONT", "BUDGET(CDLG)", "EXTERNAL(newlib)"};
     for (int t = 0; t < 5; t++) {
-        log_line("INFO vitaGL memory %-16s free %zu KB of %zu KB", kMemNames[t],
-                 vglMemFree(static_cast<vglMemType>(t)) / 1024, vglMemTotal(static_cast<vglMemType>(t)) / 1024);
+        log_line("INFO vitaGL memory %-16s free %llu KB of %llu KB", kMemNames[t],
+                 static_cast<unsigned long long>(vglMemFree(static_cast<vglMemType>(t)) / 1024),
+                 static_cast<unsigned long long>(vglMemTotal(static_cast<vglMemType>(t)) / 1024));
     }
 
     const unsigned mask = read_mask();
@@ -441,6 +528,7 @@ int main() {
     }
 
     if (mask & 2) test_dxt();
+    if (mask & 32) test_dxt_variants();
     if (mask & 4) test_fbo_scale();
     if (mask & 8) test_imgui();
 
@@ -460,8 +548,9 @@ int main() {
                  static_cast<unsigned long long>(t1 - t0), static_cast<double>(t1 - t0) / 1000.0 / frames);
 
     for (int t = 0; t < 5; t++) {
-        log_line("INFO vitaGL memory after %-16s free %zu KB of %zu KB", kMemNames[t],
-                 vglMemFree(static_cast<vglMemType>(t)) / 1024, vglMemTotal(static_cast<vglMemType>(t)) / 1024);
+        log_line("INFO vitaGL memory after %-16s free %llu KB of %llu KB", kMemNames[t],
+                 static_cast<unsigned long long>(vglMemFree(static_cast<vglMemType>(t)) / 1024),
+                 static_cast<unsigned long long>(vglMemTotal(static_cast<vglMemType>(t)) / 1024));
     }
     log_line("INFO glprobe done: %d failure(s)", g_fail);
     if (g_fd >= 0) sceIoClose(g_fd);
