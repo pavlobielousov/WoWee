@@ -585,3 +585,28 @@ When a source needs a method that is missing, the Vita compile names it; the fix
 `combat_ui`, `map_window`, `spellbook_screen`, `toast_manager`, `ui_raid_icons`, `widget_renderer`, `window_manager` 1 each), 3 sources that include `vk_context.hpp` (the three `entity_spawner*.cpp`), and 2 public signatures that carry a Vulkan type
 (`CharacterPreview::getTextureId` for `unit_portrait.cpp`, `VkTexture` for `appearance_composer.cpp`). These are exactly the files VITA-12 converts.
 
+## 19. GlProbe: vitaGL, DXT, FBO scaling and ImGui (VITA-13) *(measured on a real Vita Slim; the emulator cannot check pixels)*
+
+`tools/vita/glprobe/` is a small app (title `GLPR00001`) that answers the vitaGL questions ADR-001 left open with `PASS`/`FAIL` lines in `ux0:data/wowee/glprobe.log` (and `sceClibPrintf`, which Vita3K copies into its own log).
+It uses only the fixed-function pipeline and reads pixels back with `glReadPixels`, so it needs no screenshot. `ux0:data/wowee/glprobe.mask` (hex: 1 clear, 2 DXT, 4 FBO, 8 ImGui, 16 frame loop, 32 DXT3/DXT5 variants) runs a subset; `glprobe.init` (0 to 3) picks the init call.
+`SRC=tools/vita/glprobe BUILD=build-vita/glprobe tools/vita/build.sh`. Raw device log: `docs/vita/measurements/glprobe_device_2026-10-03.log`.
+
+**Results on the real Vita (2026-10-03, ADR-001 questions in bold):**
+- **vitaGL initialises** (`vglInitExtended(0, 960, 544, 24 MB threshold)`); `GL_RENDERER` `SGX543MP4+`, `GL_VERSION` `OpenGL ES 2.0 VitaGL`; `GL_EXT_texture_compression_s3tc` is advertised. Pools after init: CDRAM 96 MB total (about 81 MB free), RAM pool 88 MB (about 51 MB free), PHYCONT 26 MB (free), newlib heap 128 MB.
+- **DXT textures upload compressed and sample correctly: DXT1, DXT3 and DXT5**, 4x4 to 64x64, with `GL_CLAMP_TO_EDGE`, `GL_REPEAT` and `GL_MIRRORED_REPEAT`, every block read back exactly. **A DXT1 second mip level uploads and is selected when the texture is minified** (so mip skipping and mip chains from BLP work the standard way).
+- **One quirk, deterministic:** a DXT5 texture created right after a *mipmapped* DXT1 texture was drawn samples as (0,0,0,0) (the first test order, mask 2); every DXT5 case alone passes (mask 32). Looks like stale per-texture-unit state in vitaGL (the `use_mips` flag); not a format problem. Treat "bind a non-mipmapped texture after a mipmapped one" as suspect and re-test with the real renderer.
+- **The 640x368 scene in an FBO scaled to 960x544 works** (FBO complete, content correct before and after the scale), the base for the ADR's resolution plan. **ImGui 1.92.6 draws through a 60-line fixed-function renderer** (font atlas, window body, text pixels), no shader needed. The stock `imgui_impl_opengl2.cpp` does not compile against vitaGL's headers (`glOrtho`, `glPushAttrib`, `glGetTexEnviv`, `GL_TEXTURE_BINDING_2D` missing).
+- A frame loop of a trivial scene runs at **16.66 ms per frame: vsync-locked 60 fps**; says nothing about a real scene (VITA-18 and on measure that).
+
+**Vita3K v0.2.1 (macOS) runs the probe up to the pixels:** init and GL queries work (pool sizes are the emulator's numbers), but `glReadPixels` returns zeros, so the pixel tests fail there and mean nothing. (An earlier version of this section said the emulator could not run vitaGL at all: wrong, see the next trap. vitaGL's own stock sample, which loads a PVRTC texture, does abort the emulator; unexplained.)
+`libshacccg.suprx` is needed (it loads at init); on Vita3K it is copied from the Vita into the emulator's `ur0/data/`.
+
+**Traps found:**
+- **`vglInit*` returns `GL_TRUE` only if the requested resolution had to be lowered (`res_fallback` in vitaGL's `vgl.c`) and `GL_FALSE` on a normal success.** Do not treat the return value as success; check state (`vglMemTotal(VGL_MEM_VRAM) > 0`, `glGetString(GL_VERSION)`). This cost the first version of the probe an afternoon.
+- newlib's `printf` drops `%zu` (the known trap): `vglMemFree()` lines printed `zu KB` until cast to `unsigned long long`.
+- `imgui.cpp` needs `IMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS` on the Vita (`fork`/`execvp`/`waitpid`); the link needs `SceShaccCgExt taihen_stub` beside `vitashark`; vitaGL's headers do not include `GLES2/gl2ext.h`, so the S3TC constants are defined in the probe.
+- `build-vita/logs/vita3k.log` contains binary bytes: use `grep -a`.
+
+**Running a test app on the real Vita without reinstalling it (done 2026-10-03, no physical access).** The user installs one VPK once; any other test app can then be swapped into that slot over FTP and the original restored:
+`quit <TITLEID>` (vitacompanion port 1338; **`destroy` does not exist**, `help` lists the commands, `nosleep` and `screen` also exist) so the file is not locked (a running app gives FTP error 550), back up `ux0:/app/<TITLEID>/eboot.bin` and keep its SHA-256,
+upload the new `eboot.bin`, put the settings in `ux0:data/wowee/`, `launch <TITLEID>`, read the log over FTP, `quit` again, and **restore and compare the SHA-256** when done. Safest order: smallest test first, the next only if the device still answers on 1338 (a GPU hang is the one failure that would need a physical button).
