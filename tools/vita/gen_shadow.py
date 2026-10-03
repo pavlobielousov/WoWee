@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Generate the Vita's shadow headers from upstream's own (VITA-52, ADR-001).
 
-    tools/vita/gen_shadow.py            # (re)write include/platform/vita/shadow/rendering/*.hpp
+    tools/vita/gen_shadow.py            # (re)write cmake/vita/shadow/rendering/*.hpp
     tools/vita/gen_shadow.py --check    # exit 1 if a committed shadow header differs from what upstream's
                                         # header would produce now (run after every upstream sync)
 
-The Vita build puts include/platform/vita/shadow/ first on the include path, so the 28 sources outside
+The Vita build puts cmake/vita/shadow/ first on the include path, so the 28 sources outside
 rendering/ that `#include "rendering/renderer.hpp"` get the copy below, which has every declaration that
 mentions Vulkan deleted and everything else exactly as upstream wrote it. Generated, never edited by
 hand: a header that is not generated cannot be checked against upstream, and upstream adds methods
@@ -22,7 +22,7 @@ import make_shadow  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SRC = os.path.join(ROOT, 'include', 'rendering')
-DST = os.path.join(ROOT, 'include', 'platform', 'vita', 'shadow', 'rendering')
+DST = os.path.join(ROOT, 'cmake', 'vita', 'shadow', 'rendering')
 
 COMMON = ['shadow_params.hpp', 'ShadowParamsSet']
 

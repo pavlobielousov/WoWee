@@ -69,7 +69,7 @@ set(WOWEE_VITA_PLATFORM_SOURCES
 # compiles sources from src/core or src/ui links this FIRST so `#include "rendering/renderer.hpp"` resolves
 # there. Nothing links it yet: those sources need VITA-12 first (tools/vita/shadow_check.sh lists what is left).
 add_library(wowee_vita_shadow INTERFACE)
-target_include_directories(wowee_vita_shadow BEFORE INTERFACE ${WOWEE_ROOT_DIR}/include/platform/vita/shadow)
+target_include_directories(wowee_vita_shadow BEFORE INTERFACE ${WOWEE_ROOT_DIR}/cmake/vita/shadow)
 
 # Everything a Vita executable of ours needs at link time, in one place so no target can miss one
 # (VITA-47). Call it for every executable that links wowee_core or the platform layer.
