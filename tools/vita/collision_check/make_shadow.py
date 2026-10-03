@@ -23,11 +23,16 @@ def strip(lines):
         line = lines[i]
         code = re.sub(r'//.*', '', line)
         if TOKEN.search(code) or (line.lstrip().startswith('#include') and TOKEN.search(line)):
-            # drop the whole declaration: continue until a line that ends the statement
-            while i < len(lines) and not re.search(r'[;{}]\s*(//.*)?$', re.sub(r'/\*.*?\*/', '', lines[i])) \
-                    and not lines[i].lstrip().startswith('#'):
+            # drop the whole declaration: until the braces balance and the statement ends, so a
+            # dropped `struct X {` takes its body with it
+            depth = 0
+            while i < len(lines):
+                c = re.sub(r'/\*.*?\*/', '', re.sub(r'//.*', '', lines[i]))
+                depth += c.count('{') - c.count('}')
+                done = depth <= 0 and (re.search(r'[;}]\s*$', c) or lines[i].lstrip().startswith('#'))
                 i += 1
-            i += 1
+                if done:
+                    break
             continue
         out.append(line)
         i += 1

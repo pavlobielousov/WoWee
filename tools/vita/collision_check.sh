@@ -15,7 +15,9 @@ rm -rf "$OUT"; mkdir -p "$OUT/rendering"
 # <header> <source> [--drop ...]: add a line when another collision file joins.
 python3 tools/vita/collision_check/make_shadow.py include/rendering/wmo_renderer.hpp "$OUT/rendering/wmo_renderer.hpp" \
     --drop shadow_params.hpp --drop ShadowParamsSet
-FILES="src/rendering/wmo_renderer_collision.cpp"
+python3 tools/vita/collision_check/make_shadow.py include/rendering/m2_renderer.hpp "$OUT/rendering/m2_renderer.hpp" \
+    --drop shadow_params.hpp --drop ShadowParamsSet --drop ParticleGroupKey --drop ParticleGroupKeyHash
+FILES="src/rendering/wmo_renderer_collision.cpp src/rendering/m2_renderer_collision.cpp"
 
 limits=""
 [ "$runtime" = container ] && limits="--memory ${MEMORY:-6G} --cpus ${CPUS:-2}"

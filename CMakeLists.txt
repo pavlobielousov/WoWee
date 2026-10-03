@@ -939,6 +939,7 @@ set(WOWEE_SOURCES
     src/rendering/m2_renderer_render.cpp
     src/rendering/m2_renderer_particles.cpp
     src/rendering/m2_renderer_instance.cpp
+    src/rendering/m2_renderer_collision.cpp
     src/rendering/m2_model_classifier.cpp
     src/rendering/render_graph.cpp
     src/rendering/hiz_system.cpp
@@ -2570,6 +2571,7 @@ add_executable(wowee_editor
     src/rendering/shadow_params.cpp
     src/rendering/m2_renderer.cpp
     src/rendering/m2_renderer_instance.cpp
+    src/rendering/m2_renderer_collision.cpp
     src/rendering/m2_renderer_particles.cpp
     src/rendering/m2_renderer_render.cpp
     src/rendering/m2_model_classifier.cpp
