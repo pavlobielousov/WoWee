@@ -55,34 +55,59 @@ add_custom_target(wowee_version ALL
     COMMENT "Resolving version from git"
     VERBATIM)
 
-add_executable(wowee
-    ${WOWEE_ROOT_DIR}/src/main.cpp
-    ${WOWEE_ROOT_DIR}/src/core/logger.cpp
-    ${WOWEE_ROOT_DIR}/src/core/config_paths.cpp
+# The platform layer every Vita executable that uses the logger or threads links (VITA-6, VITA-8,
+# VITA-42): the startup path, the log sink, the thread budget and the thread-safe-statics guards.
+set(WOWEE_VITA_PLATFORM_SOURCES
     ${WOWEE_VITA_SRC_DIR}/vita_main.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_cxa_guard.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_env.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_log_sink.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_threads.cpp)
-add_dependencies(wowee wowee_version)
-target_include_directories(wowee PRIVATE ${WOWEE_ROOT_DIR}/include ${CMAKE_BINARY_DIR}/generated)
-target_compile_definitions(wowee PRIVATE
-    WOWEE_VITA_HEAP_MB=${WOWEE_VITA_HEAP_MB} WOWEE_VITA_STACK_MB=${WOWEE_VITA_STACK_MB})
-target_link_libraries(wowee pthread
-    SceIofilemgr_stub SceLibKernel_stub SceSysmodule_stub SceNet_stub SceNetCtl_stub ScePower_stub)
 
-# GCC 15's __gthread_active_p() tests a weak reference to pthread_cancel; without this std::thread
-# throws "Enable multithreading to use std::thread: Not owner" (see tools/vita/depcheck/CMakeLists.txt).
-target_link_options(wowee PRIVATE -Wl,-u,pthread_cancel)
+# Everything a Vita executable of ours needs at link time, in one place so no target can miss one
+# (VITA-47). Call it for every executable that links wowee_core or the platform layer.
+function(wowee_vita_executable target)
+    add_dependencies(${target} wowee_version)
+    target_include_directories(${target} PRIVATE ${WOWEE_ROOT_DIR}/include ${CMAKE_BINARY_DIR}/generated)
+    target_compile_definitions(${target} PRIVATE
+        WOWEE_VITA_HEAP_MB=${WOWEE_VITA_HEAP_MB} WOWEE_VITA_STACK_MB=${WOWEE_VITA_STACK_MB})
+    target_link_libraries(${target} PRIVATE pthread
+        SceIofilemgr_stub SceLibKernel_stub SceSysmodule_stub SceNet_stub SceNetCtl_stub ScePower_stub)
 
-# pthread-embedded gives a std::thread a 32 KB stack; vita_threads.cpp wraps pthread_create to
-# raise it (VITA-8). Every Vita executable that starts threads needs both.
-target_link_options(wowee PRIVATE -Wl,--wrap=pthread_create)
+    # GCC 15's __gthread_active_p() tests a weak reference to pthread_cancel; without this
+    # std::thread throws "Enable multithreading to use std::thread: Not owner" (see
+    # tools/vita/depcheck/CMakeLists.txt).
+    target_link_options(${target} PRIVATE -Wl,-u,pthread_cancel)
 
-# sceUserMainThreadStackSize (vita_main.cpp) is read by the loader from the ELF, but nothing in the
-# program references it, so --gc-sections removed it and the main thread kept its 256 KB stack
-# (measured on hardware, VITA-8). -u keeps it.
-target_link_options(wowee PRIVATE -Wl,-u,sceUserMainThreadStackSize)
+    # pthread-embedded gives a std::thread a 32 KB stack; vita_threads.cpp wraps pthread_create to
+    # raise it (VITA-8). Every Vita executable that starts threads needs both.
+    target_link_options(${target} PRIVATE -Wl,--wrap=pthread_create)
+
+    # sceUserMainThreadStackSize (vita_main.cpp) is read by the loader from the ELF, but nothing in
+    # the program references it, so --gc-sections removed it and the main thread kept its 256 KB
+    # stack (measured on hardware, VITA-8). -u keeps it.
+    target_link_options(${target} PRIVATE -Wl,-u,sceUserMainThreadStackSize)
+endfunction()
+
+add_executable(wowee
+    ${WOWEE_ROOT_DIR}/src/main.cpp
+    ${WOWEE_ROOT_DIR}/src/core/logger.cpp
+    ${WOWEE_ROOT_DIR}/src/core/config_paths.cpp
+    ${WOWEE_VITA_PLATFORM_SOURCES})
+wowee_vita_executable(wowee)
+
+# wowee_core (VITA-47): the renderer-free core (auth, network, game, pipeline, ...), built from the
+# same sources as on the desktop. The silent AudioEngine replaces miniaudio (no backend yet, VITA-29)
+# and Warden is stubbed (cmake/wowee_core.cmake). Nothing links it into the VPK yet: the headless
+# client (VITA-48) will. wowee_core_link_check is an ELF that links every object of it, so a symbol
+# the core needs and cannot find fails the build here.
+add_compile_definitions(GLM_ENABLE_EXPERIMENTAL GLM_FORCE_DEPTH_ZERO_TO_ONE)
+set(WOWEE_CORE_NULL_AUDIO ON)
+set(WOWEE_CORE_LIBS ssl crypto z pthread)
+include(${CMAKE_CURRENT_LIST_DIR}/../wowee_core.cmake)
+target_compile_definitions(wowee_core_objects PUBLIC WOWEE_VITA_HEAP_MB=${WOWEE_VITA_HEAP_MB})
+target_sources(wowee_core_link_check PRIVATE ${WOWEE_VITA_PLATFORM_SOURCES})
+wowee_vita_executable(wowee_core_link_check)
 
 # UNSAFE: extended memory and some sysmodules.
 vita_create_self(eboot.bin wowee UNSAFE)

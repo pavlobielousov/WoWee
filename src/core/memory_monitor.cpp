@@ -10,6 +10,9 @@
 #include <mach/mach.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#elif defined(__vita__)
+// No <sys/sysinfo.h> and no /proc. The Vita has 512 MB shared with the system; what the client
+// may use is its newlib heap (VITA-6), so that is the "total" here. The real budget is VITA-23.
 #else
 #include <sys/sysinfo.h>
 #endif
@@ -17,7 +20,7 @@
 namespace wowee {
 namespace core {
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__vita__)
 namespace {
 size_t readMemAvailableBytesFromProc() {
     std::ifstream meminfo("/proc/meminfo");
@@ -37,7 +40,7 @@ size_t readMemAvailableBytesFromProc() {
     return 0;
 }
 } // namespace
-#endif // !_WIN32 && !__APPLE__
+#endif // !_WIN32 && !__APPLE__ && !__vita__
 
 MemoryMonitor& MemoryMonitor::getInstance() {
     static MemoryMonitor instance;
@@ -69,6 +72,13 @@ void MemoryMonitor::initialize() {
         totalRAM_ = kFallbackRAM;
         LOG_WARNING("Could not detect system RAM, assuming 16GB");
     }
+#elif defined(__vita__)
+#ifdef WOWEE_VITA_HEAP_MB
+    totalRAM_ = static_cast<size_t>(WOWEE_VITA_HEAP_MB) * 1024 * 1024;
+#else
+    totalRAM_ = 192u * 1024 * 1024;
+#endif
+    LOG_INFO("Vita heap: ", totalRAM_ / (1024 * 1024), " MB");
 #else
     struct sysinfo info;
     if (sysinfo(&info) == 0) {
@@ -112,6 +122,8 @@ size_t MemoryMonitor::getAvailableRAM() const {
         }
     }
     return totalRAM_ / 2;
+#elif defined(__vita__)
+    return totalRAM_ / 2;  // no way to ask the heap; half is the same guess the other fallbacks make
 #else
     // Best source on Linux for reclaimable memory headroom.
     if (size_t memAvailable = readMemAvailableBytesFromProc(); memAvailable > 0) {

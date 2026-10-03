@@ -417,3 +417,34 @@ without them stopped at its first `LOG_*` call (right after "writing the log to 
 showed it waiting in `__cxa_guard_acquire` for the `static const std::string home` guard in `Logger::emitLineLocked`. With the 32-bit guard the threadcheck
 probe logs with the flags dropped (`-DTHREADCHECK_SECTIONS=`) as well. `Vita.cmake` keeps the flags for size; they are no longer needed for correctness. Still needed
 for correctness: `-Wl,-u,sceUserMainThreadStackSize` (else `--gc-sections` drops the stack-size symbol). The hang is Vita3K only so far; hardware check is on VITA-34.
+
+## 14. wowee_core: the renderer-free core (VITA-9 audit, VITA-47) *(builds and links on desktop and for the Vita; nothing runs it yet, that is VITA-48)*
+
+`wowee_core` is the part of the client that needs no renderer, window or UI toolkit: `auth`, `network`, `math`, `pipeline`, `game`,
+`audio` (managers), the clean part of `core/` (`logger`, `config_paths`, `memory_monitor`, `app_clock`) and three files that live in
+`rendering/` and `ui/` but need only std/glm/logger (`animation_ids`, `emote_registry`, `framexml_takeover`). `docs/vita/HEADLESS_AUDIT.md`
+says why and how each seam was cut. `src/addons/` is deliberately not in it (VITA-49).
+
+**How it is defined.** `cmake/wowee_core.cmake` (fork-only) globs those directories, so the 450-file `WOWEE_SOURCES` list in the root
+`CMakeLists.txt` is untouched and a file upstream adds under one of them joins the core automatically (and fails the link check if it
+reaches the renderer). It makes `wowee_core_objects`, `wowee_core` (static) and `wowee_core_link_check`, an executable that links
+**every** object, so an undefined reference is a build error. Desktop: off by default, `-DWOWEE_BUILD_CORE=ON` (the client does not use it);
+Vita: always built by `cmake/vita/Vita.cmake`, which also holds `wowee_vita_executable()`, the one place that lists the Vita link
+libraries and options (`pthread`, `-u pthread_cancel`, `--wrap=pthread_create`, `-u sceUserMainThreadStackSize`, the platform sources).
+
+**What replaces what.** Definitions the core needs that live in files it does not have:
+`src/platform/headless/stb_image_impl.cpp` (stb_image's implementation, which the desktop keeps in `rendering/loading_screen.cpp`),
+`src/platform/headless/cvar_defaults.cpp` (`addons::storedCVarValue`: no store, every setting is its default; **drop it when `addons/`
+joins the core**, both define the function). Option `WOWEE_CORE_NULL_AUDIO` (always ON on the Vita) builds
+`src/platform/vita/audio_engine_null.cpp` instead of `audio_engine.cpp` (VITA-46). On the Vita, Warden is `src/platform/vita/warden_stub.cpp`
+instead of `warden_module.cpp` + `warden_emulator.cpp` (OpenSSL 3 and unicorn are not available): `load()` refuses, which the handler already
+treats as "no module". `memory_monitor.cpp` has a Vita arm (its "total RAM" is the newlib heap; the real budget is VITA-23).
+
+**Checks.**
+- Desktop: `tools/vita/core_check.sh` (and `NULL_AUDIO=1 tools/vita/core_check.sh`) in the desktop-builder container: builds and links
+  `wowee_core_link_check`, then reads ninja's dependency records and fails if any core object reaches a Vulkan, SDL, ImGui, VMA or Lua
+  header (253 objects, none does). Own build directory (`build-core`, `build-core-null`; add to `.git/info/exclude`).
+- Vita: `JOBS=5 tools/vita/build.sh` builds everything including `wowee_core_link_check` (an ELF, not in the VPK) with the Vita compiler,
+  where there are no Vulkan headers at all, which is stronger than `sweep.sh`. About 30 minutes cold. **`build.sh` now gives the container
+  10 GB and 8 CPUs** (Apple's default 1 GB thrashed and never finished); eight parallel `-O2 -g` compiles of the game sources were killed for
+  memory even then, hence `JOBS=5`.
