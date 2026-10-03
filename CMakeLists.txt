@@ -32,6 +32,8 @@ endif()
 # Options
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(WOWEE_BUILD_TESTS "Build tests" ON)
+option(WOWEE_BUILD_CORE "Build wowee_core, the renderer-free core library, and its link check (VITA-47)" OFF)
+option(WOWEE_CORE_NULL_AUDIO "wowee_core: use the silent AudioEngine instead of miniaudio" OFF)
 option(WOWEE_ENABLE_ASAN "Enable AddressSanitizer + UBSan (applied to all build configs; pairs well with Debug)" OFF)
 option(WOWEE_ENABLE_TRACY "Enable Tracy profiler instrumentation" OFF)
 # AMD's FidelityFX SDK backends, off by default.
@@ -1318,6 +1320,12 @@ add_custom_target(wowee_version ALL
     VERBATIM
 )
 add_dependencies(wowee wowee_version)
+
+# The renderer-free core library (VITA-47), off by default: the client above does not use it.
+if(WOWEE_BUILD_CORE)
+    set(WOWEE_CORE_LIBS OpenSSL::SSL OpenSSL::Crypto Threads::Threads ZLIB::ZLIB ${CMAKE_DL_LIBS})
+    include(cmake/wowee_core.cmake)
+endif()
 
 # Include directories
 target_include_directories(wowee PRIVATE
