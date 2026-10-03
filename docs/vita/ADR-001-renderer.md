@@ -1,6 +1,6 @@
 # ADR-001: Renderer architecture for the PS Vita (VITA-11)
 
-Status: **proposed** (2026-10-03), for the user's decision. Decided on measurements of the tree and the device, not on a prototype: nothing here has drawn a triangle yet (that is VITA-13).
+Status: **accepted** (user, 2026-10-03). Decided on measurements of the tree and the device, not on a prototype: nothing here has drawn a triangle yet (that is VITA-13).
 
 ## Decision
 
@@ -68,8 +68,8 @@ Cut: shadows, Hi-Z and all compute culling, FSR/FSR2/FSR3, post-process chain (a
 ## Consequences for the board
 
 - **VITA-12** shrinks and sharpens: opaque `UiTexture`, `UiTextureLoader`, window/ImGui init behind a seam; no `VkContext` or `Vk*` type in any `ui/` or `core/` file. Scope is the 43 files above, not 33.
-- **New item A (before VITA-13): `Vulkan-free collision world`**: extract the CPU geometry and queries of `WMORenderer` and `M2Renderer` (floor height, wall sweep, inside tests, raycast, floor caches) into classes with no Vulkan, used by the existing renderers unchanged in behaviour (desktop check must stay 220/220). Upstream-candidate, size L.
-- **New item B: `rendering/gl` shadow headers and Vita `Renderer` skeleton**: the include-path mechanism in `Vita.cmake`, the shadow headers with stubs for every call in the list, so the `ui/` and `core/` sources compile for the Vita (needs VITA-12). This is the "Application builds on the Vita" milestone and part of VITA-13.
+- **VITA-51 (before VITA-13): `Vulkan-free collision world`**: extract the CPU geometry and queries of `WMORenderer` and `M2Renderer` (floor height, wall sweep, inside tests, raycast, floor caches) into classes with no Vulkan, used by the existing renderers unchanged in behaviour (desktop check must stay 220/220). Upstream-candidate, size L.
+- **VITA-52: `rendering/gl` shadow headers and Vita `Renderer` skeleton**: the include-path mechanism in `Vita.cmake`, the shadow headers with stubs for every call in the list, so the `ui/` and `core/` sources compile for the Vita (needs VITA-12). This is the "Application builds on the Vita" milestone and part of VITA-13.
 - **VITA-13** (vitaGL bring-up) = window, context, ImGui (GLES2), first triangle, the DXT check, the GL thread rules, and a measured number for draw-call cost.
 - **VITA-14** = the 14 shaders in GLSL ES 1.00 plus the run-time compile and shader cache; drop the "offline CG to GXP" task from v1.
 - VITA-18..21 follow the cut list above; VITA-16 (HUD) can reuse `PerformanceHUD`, which is Vulkan-free.
