@@ -329,7 +329,6 @@ public:
 
     /** Load a BLP texture from MPQ and return VkTexture* (cached). */
     GpuTexture* loadTexture(const std::string& path);
-    [[nodiscard]] GpuTexture* getTransparentTexture() const;
 
     /** Replace a loaded model's texture at the given slot. */
     void setModelTexture(uint32_t modelId, uint32_t textureSlot, GpuTexture* texture);
