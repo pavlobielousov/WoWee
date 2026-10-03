@@ -116,6 +116,10 @@ target_compile_definitions(wowee_core_objects PUBLIC WOWEE_VITA_HEAP_MB=${WOWEE_
 target_sources(wowee_core_link_check PRIVATE ${WOWEE_VITA_PLATFORM_SOURCES})
 wowee_vita_executable(wowee_core_link_check)
 
+# wowee_client (VITA-52): the application shell (src/core, src/ui, addons) over the core, with the Vita's window
+# and renderer skeletons.
+include(${CMAKE_CURRENT_LIST_DIR}/wowee_client.cmake)
+
 # wowee_headless (VITA-48): the console client on the core, its own VPK so wowee.vpk keeps working.
 # The Vita has no command line: it reads WOWEE_HEADLESS_* from ux0:data/wowee/env.txt. The client's
 # own expansion tables (about 300 KB, not game data) ship in the VPK under Data/expansions.
