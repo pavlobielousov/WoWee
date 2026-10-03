@@ -568,12 +568,12 @@ collision file and by the debug dump left in `wmo_renderer.cpp`). `debugDumpGrou
 
 ## 18. Shadow headers: the Vita's view of the renderer (VITA-52, ADR-001) *(mechanism and checks done; `src/core` and `src/ui` still wait for VITA-12)*
 
-The 28 sources outside `rendering/` that talk to the renderer (and the headers they include) keep `#include "rendering/renderer.hpp"`, and so on. The Vita build puts `include/platform/vita/shadow/` **first** on the include path
+The 28 sources outside `rendering/` that talk to the renderer (and the headers they include) keep `#include "rendering/renderer.hpp"`, and so on. The Vita build puts `cmake/vita/shadow/` **first** on the include path
 (`wowee_vita_shadow` in `cmake/vita/Vita.cmake`, an INTERFACE target to link before anything else), so those includes resolve to the Vita's copies: upstream's own header with every declaration that mentions Vulkan deleted
 and everything else exactly as written. 22 headers (`renderer`, `character_renderer`, `wmo_renderer`, `m2_renderer`, `minimap`, `post_process_pipeline`, `sky_system`, `terrain_renderer`, ...) plus `vk_context.hpp`, which is **poisoned**:
 including it in a Vita build stops with `#error ... (VITA-12)`, naming the item that removes the dependency instead of failing on a missing `vulkan.h`.
 
-**The copies are generated, never edited:** `tools/vita/gen_shadow.py` writes them (the table `HEADERS` in the script lists, per header, the GPU-only types that carry no Vulkan token and must be dropped too, such as `GPUPerFrameData` or `ParticleGroupKey`);
+**The directory is `cmake/vita/shadow/`, not under `include/`, on purpose: upstream's own sweeps (`duplicate_block_check.py`, `unused_member_check.py`, run by the `sweep_guard` test) scan `include/` and `src/` and flagged the generated copies as duplicated code.** **The copies are generated, never edited:** `tools/vita/gen_shadow.py` writes them (the table `HEADERS` in the script lists, per header, the GPU-only types that carry no Vulkan token and must be dropped too, such as `GPUPerFrameData` or `ParticleGroupKey`);
 `tools/vita/gen_shadow.py --check` fails if a committed copy differs from what upstream's header produces now. **After every upstream sync: run the check, regenerate, commit.** A hand-edited copy would drift from upstream silently.
 When a source needs a method that is missing, the Vita compile names it; the fix is the Vita implementation (VITA-13/18/19/20 in `src/rendering/gl/`), not the copy.
 

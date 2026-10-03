@@ -56,7 +56,7 @@ sed -e "s/@WOWEE_GIT_VERSION@/sweep/" -e "s/@WOWEE_BUILD_DATE@/today/" include/c
 VKINC=""; [ -d build-vita/vulkan-headers/include ] && VKINC="-isystem build-vita/vulkan-headers/include"
 # SHADOW=1 (VITA-52): the Vita'"'"'s own declarations of the renderer first, and no Vulkan headers to fall back on.
 SHADOWINC=""
-if [ -n "$SHADOW" ]; then SHADOWINC="-Iinclude/platform/vita/shadow"; VKINC=""; fi
+if [ -n "$SHADOW" ]; then SHADOWINC="-Icmake/vita/shadow"; VKINC=""; fi
 export VKINC SHADOWINC
 xargs -P "$JOBS" -n 1 "$OUT/one.sh" < "$OUT/files.txt" | sort > "$OUT/results.tsv"
 
