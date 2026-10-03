@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Verify that a refactor only MOVED code (VITA-51).
 
-    check_move.py <old file at git rev>:<rev> <new file> [<new file> ...] [--allow 'regex' ...]
+    check_move.py <rev>:<old file> [--old <rev>:<old file> ...] <new file> [<new file> ...] [--allow 'regex' ...]
+                  [--allow-lost 'regex' ...]
+
+Several --old files are summed (code moved out of two files into one).
 
 Compares the code lines that disappeared from the old file with the code lines that appeared in the
 new files (the shrunk original counts as a new file too). Blank lines, `#include` lines and
@@ -30,9 +33,16 @@ while '--allow' in args:
     i = args.index('--allow')
     allow.append(re.compile(args[i + 1]))
     del args[i:i + 2]
-old_spec, new_files = args[0], args[1:]
-rev, path = old_spec.split(':', 1)
-old = subprocess.run(['git', 'show', f'{rev}:{path}'], capture_output=True, text=True, check=True).stdout.split('\n')
+old_specs = [args[0]]
+while '--old' in args:
+    i = args.index('--old')
+    old_specs.append(args[i + 1])
+    del args[i:i + 2]
+new_files = args[1:]
+old = []
+for spec in old_specs:
+    rev, path = spec.split(':', 1)
+    old += subprocess.run(['git', 'show', f'{rev}:{path}'], capture_output=True, text=True, check=True).stdout.split('\n')
 
 
 def norm(lines):
