@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tiny TCP echo server for depcheck's socket test (VITA-3): python3 tools/vita/depcheck/echo_server.py [port]."""
+"""Tiny TCP echo server for depcheck's socket test (VITA-3; "bye" makes it close the connection, VITA-7): python3 tools/vita/depcheck/echo_server.py [port]."""
 import socketserver
 import sys
 
@@ -8,6 +8,8 @@ class Echo(socketserver.BaseRequestHandler):
     def handle(self):
         print("connection from", self.client_address, flush=True)
         while data := self.request.recv(1024):
+            if data.startswith(b"bye"):  # VITA-7: close on request, so the client sees a peer close
+                return
             self.request.sendall(data)
 
 

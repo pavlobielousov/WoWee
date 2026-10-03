@@ -518,3 +518,25 @@ auth, lists the character, enters the world as `Vitatester`, logs the MOTD and c
 failed with `Host is unreachable` (and `No data` for 127.0.0.1): macOS asks Vita3K.app for "Local Network" permission on the first LAN connection,
 and until it is granted (System Settings, Privacy & Security, Local Network) the emulator cannot reach any LAN host. Vita3K proves the code path,
 not Wi-Fi, speed or memory: the real-device run is a VITA-34 task.
+
+## 16. Networking on the Vita (VITA-7) *(measured on Vita3K; real Wi-Fi, load and the 30-minute run are VITA-34 / VITA-10)*
+
+`src/network` runs on the Vita through `net_platform.hpp`'s POSIX branch: newlib maps BSD sockets to sceNet after `initProcess()` (section 12) has called
+`sceNetInit`. `tools/vita/depcheck` (section `sockets`, needs `python3 tools/vita/depcheck/echo_server.py` on the Mac; `depcheck_host.txt` in
+`ux0:data/wowee` names its LAN IP, and Vita3K.app needs macOS "Local Network" permission, section 15) measured what that branch relies on:
+
+| Call | Vita3K result | `net_platform.hpp` expects |
+|---|---|---|
+| non-blocking `connect` | -1, `errno` 119 | `EINPROGRESS` (newlib 119) ok |
+| non-blocking `recv`, nothing to read | -1, `errno` 11 | `EAGAIN`/`EWOULDBLOCK` (11) ok |
+| `recv` after the peer closed | 0 | 0 means closed ok |
+| `send` after the peer closed | succeeds twice (no `EPIPE`) | the emulator's host stack; real device unknown, VITA-34 |
+| `getsockopt(SO_ERROR)`, refused | **61** (newlib `ECONNREFUSED` is 111) | the code only tests `!= 0`; the message used `strerror`, which named the wrong error |
+| `sceNetCtlInetGetState` | 3 = connected | |
+
+So `errno` values are newlib's and need no arm; only `SO_ERROR` is in sceNet numbers. Two small gated additions in `net_platform.hpp`
+(`include/platform/vita/net_state.hpp` holds the logic): `net::socketErrorString()` (the two `SO_ERROR` sites use it; elsewhere it is `errorString`;
+on the Vita 61 reads "connection refused", the other BSD numbers 50/51/54/60/64/65 are mapped by convention and unverified) and a Wi-Fi check at the top of
+`openResolvedSocket` that fails with "Wi-Fi is not connected (network state N)" instead of a bare connect error. A failed state query does not block
+the connection. Not testable on Vita3K: a disconnected state. Still open (hardware): the async pump at 444 MHz with `WOWEE_NET_ASYNC_PUMP` 1 vs 0 (needs
+a busy area), DNS (`getaddrinfo("localhost")` works, a real name is untested), `EPIPE`, and the 30-minute session.

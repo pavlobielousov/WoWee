@@ -39,6 +39,9 @@
 #include <string>
 
 #include "core/logger.hpp"
+#ifdef __vita__
+#include "platform/vita/net_state.hpp"
+#endif
 
 namespace wowee {
 namespace net {
@@ -131,6 +134,16 @@ inline const char* errorString(int err) {
 #endif
 }
 
+// What getsockopt(SO_ERROR) reported, in words. Only differs on the Vita, where that value is a
+// sceNet number rather than an errno (include/platform/vita/net_state.hpp).
+inline std::string socketErrorString(int soError) {
+#ifdef __vita__
+    return platform::vita::socketErrorString(soError);
+#else
+    return errorString(soError);
+#endif
+}
+
 // Portable send - Windows recv/send take char*, not void*.
 inline ssize_t portableSend(socket_t s, const uint8_t* data, size_t len) {
     return ::send(s, reinterpret_cast<const char*>(data), static_cast<int>(len), 0);
@@ -149,6 +162,13 @@ inline ssize_t portableRecv(socket_t s, uint8_t* buf, size_t len) {
 /// between them. It was written out twice, down to the log lines.
 inline socket_t openResolvedSocket(const std::string& host, uint16_t port,
                                    struct sockaddr_in& addr) {
+#ifdef __vita__
+    // Say "Wi-Fi is off" instead of failing in connect with a number nobody can read.
+    if (int state = -1; !platform::vita::wifiConnected(state)) {
+        LOG_ERROR("Wi-Fi is not connected (network state ", state, "); turn it on and connect first");
+        return INVALID_SOCK;
+    }
+#endif
     socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd == INVALID_SOCK) {
         LOG_ERROR("Failed to create socket");

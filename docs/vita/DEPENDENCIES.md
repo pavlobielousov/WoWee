@@ -196,7 +196,7 @@ Notes for whoever repeats this:
 ## 7. Not verified (and where it gets verified)
 
 - Everything tagged `[v3k]` ran on an emulator. Values that depend on the OS or hardware (`hardware_concurrency`, `fs::space`, the `remove_all` hang,
-  `SO_ERROR` numbers, DNS) need a real Vita: **VITA-34**.
+  `SO_ERROR` numbers beyond 61, DNS) need a real Vita: **VITA-34**.
 - Link and runtime behaviour of the *real* WoWee sources is untested; the sweep proves only that they parse. Linking starts with VITA-4 and VITA-9.
 - vitaGL's version, build flags and whether SDL3 or vitaGL owns the display are decided in VITA-13, not here.
 - The audio path (miniaudio custom backend) is a plan, not a test (VITA-29).
