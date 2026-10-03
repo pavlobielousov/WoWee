@@ -931,6 +931,7 @@ set(WOWEE_SOURCES
     src/rendering/character_renderer.cpp
     src/rendering/character_preview.cpp
     src/rendering/wmo_renderer.cpp
+    src/rendering/wmo_renderer_collision.cpp
     src/rendering/imgui_texture.cpp
     src/rendering/bone_slots.cpp
     src/rendering/normal_map.cpp
@@ -2573,6 +2574,7 @@ add_executable(wowee_editor
     src/rendering/m2_renderer_render.cpp
     src/rendering/m2_model_classifier.cpp
     src/rendering/wmo_renderer.cpp
+    src/rendering/wmo_renderer_collision.cpp
     src/rendering/imgui_texture.cpp
     src/rendering/bone_slots.cpp
     src/rendering/normal_map.cpp
