@@ -1325,6 +1325,15 @@ add_dependencies(wowee wowee_version)
 if(WOWEE_BUILD_CORE)
     set(WOWEE_CORE_LIBS OpenSSL::SSL OpenSSL::Crypto Threads::Threads ZLIB::ZLIB ${CMAKE_DL_LIBS})
     include(cmake/wowee_core.cmake)
+
+    # The console client built on the core alone (VITA-48).
+    add_executable(wowee_headless
+        tools/headless/main.cpp
+        tools/headless/headless_client.cpp)
+    target_link_libraries(wowee_headless PRIVATE wowee_core ${WOWEE_CORE_LIBS})
+    target_include_directories(wowee_headless SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/extern)
+    set_target_properties(wowee_headless PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 endif()
 
 # Include directories

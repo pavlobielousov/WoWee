@@ -418,7 +418,7 @@ showed it waiting in `__cxa_guard_acquire` for the `static const std::string hom
 probe logs with the flags dropped (`-DTHREADCHECK_SECTIONS=`) as well. `Vita.cmake` keeps the flags for size; they are no longer needed for correctness. Still needed
 for correctness: `-Wl,-u,sceUserMainThreadStackSize` (else `--gc-sections` drops the stack-size symbol). The hang is Vita3K only so far; hardware check is on VITA-34.
 
-## 14. wowee_core: the renderer-free core (VITA-9 audit, VITA-47) *(builds and links on desktop and for the Vita; nothing runs it yet, that is VITA-48)*
+## 14. wowee_core: the renderer-free core (VITA-9 audit, VITA-47) *(builds and links on desktop and for the Vita; `wowee_headless`, section 15, is the first program that runs it)*
 
 `wowee_core` is the part of the client that needs no renderer, window or UI toolkit: `auth`, `network`, `math`, `pipeline`, `game`,
 `audio` (managers), the clean part of `core/` (`logger`, `config_paths`, `memory_monitor`, `app_clock`) and three files that live in
@@ -448,3 +448,46 @@ treats as "no module". `memory_monitor.cpp` has a Vita arm (its "total RAM" is t
   where there are no Vulkan headers at all, which is stronger than `sweep.sh`. About 30 minutes cold. **`build.sh` now gives the container
   10 GB and 8 CPUs** (Apple's default 1 GB thrashed and never finished); eight parallel `-O2 -g` compiles of the game sources were killed for
   memory even then, hence `JOBS=5`.
+
+## 15. wowee_headless: the console client (VITA-48) *(desktop: verified against a LAN AzerothCore; Vita build is PR 3)*
+
+`wowee_headless` (`tools/headless/`, fork-only) is a console program that uses only `wowee_core`. It does by hand what `Application` and the
+login, realm and character screens do: sync and load the expansion tables (`syncClientTables`, `ExpansionRegistry`, opcode and update-field
+tables, packet parsers, DBC layouts), authenticate (`AuthHandler`, `ClientInfo` filled as `AuthScreen::beginAuthAttempt` does), connect to the
+chosen realm's world server and wait for the character list, which the world server requests by itself after world auth. PR 1 stops there;
+entering the world and logging chat and entities is PR 2, the Vita build PR 3. No `AssetManager` is built (`services.assetManager` is null).
+
+**Build and run (desktop, in the container; the host has no toolchain).**
+
+```sh
+# configure + build, same flags as core_check.sh (build-core is git-ignored locally)
+container run --rm --memory 10G --cpus 8 --entrypoint /bin/bash -v "$PWD:/workspace" -w /workspace wowee-desktop-builder -c \
+  'cmake -S . -B build-core -G Ninja -DCMAKE_BUILD_TYPE=Release -DWOWEE_BUILD_TESTS=ON -DWOWEE_BUILD_CORE=ON && cmake --build build-core --target wowee_headless'
+# run from the repo root so ./Data/expansions (the client's own tables) is found
+container run --rm --env-file ~/wowee-headless.env --entrypoint /bin/bash -v "$PWD:/workspace" -w /workspace wowee-desktop-builder -c build-core/bin/wowee_headless
+```
+
+**Settings** are environment variables only (no command line: the Vita has only `env.txt`, and `ps` shows arguments). Keep them in a file
+outside the repo; there is no default server.
+
+| Variable | Meaning |
+|---|---|
+| `WOWEE_HEADLESS_HOST`, `_PORT` | auth server (port default 3724) |
+| `WOWEE_HEADLESS_ACCOUNT`, `_PASSWORD` | credentials (never logged, never committed) |
+| `WOWEE_HEADLESS_EXPANSION` | profile id: `classic`, `tbc`, `wotlk`, `turtle`, ... |
+| `WOWEE_HEADLESS_REALM` | realm name (default: first in the list) |
+| `WOWEE_HEADLESS_TIMEOUT` | seconds each phase may take (default 30) |
+| `WOW_DATA_PATH` | data root holding `expansions/<id>/` (default `./Data`) |
+| `WOWEE_REALM_HOST_OVERRIDE` | replaces the host in the realm list (AzerothCore advertises `127.0.0.1`, which inside a container is the container) |
+
+**Exit codes**: 0 ok, 2 missing/bad option, 3 tables (no `expansions/`, unknown expansion id, a table or parser would not load), 4 TCP connect
+failed (auth or world), 5 login refused / PIN or authenticator needed / bad session key, 6 world login failed or realm not found, 7 a phase
+timed out. Each prints an `[ERROR]` line before the code.
+
+**Verified (desktop container, 2026-10-03):** closed port (`127.0.0.1:1`) exit 4 "Connection refused"; unknown expansion `nope` exit 3;
+`WOW_DATA_PATH` of an empty directory exit 3; no options exit 2. Live (LAN AzerothCore 3.3.5a, `wotlk`, 2026-10-03): auth with protocol 8, realm list, world login and character list all work (exit 0; the
+account had no characters). The auth handler does not ask for the realm list by itself after login (the realm screen does), so the driver
+sends `requestRealmList()` once the state is `AUTHENTICATED`. With no `AssetManager` (`services.assetManager` null) the handler ran
+through world auth and the character list without a crash. Warden: the server's module is refused on Linux ("Cannot execute Windows x86
+code"), the server did not drop the connection in the few seconds this ran. `WOWEE_LOG_LEVEL=debug` shows the packet-level log.
+`WOWEE_REALM_HOST_OVERRIDE` was not needed here (the realm advertises the LAN address).
