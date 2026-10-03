@@ -30,10 +30,10 @@ limits=""
 # shellcheck disable=SC2086
 "$runtime" run --rm $limits -e OUT="$OUT" -v "$VITA_ROOT:/workspace" "$VITASDK_IMAGE" sh -c '
 cd /workspace
-F="-std=gnu++20 -DGLM_ENABLE_EXPERIMENTAL -DGLM_FORCE_DEPTH_ZERO_TO_ONE -Iinclude/platform/vita/shadow -Iinclude -Isrc -isystem extern"
+F="-std=gnu++20 -DGLM_ENABLE_EXPERIMENTAL -DGLM_FORCE_DEPTH_ZERO_TO_ONE -Icmake/vita/shadow -Iinclude -Isrc -isystem extern"
 # 2a: the shadow renderer.hpp is the one included, and nothing named *vulkan* / vk_* is
 inc=$(arm-vita-eabi-g++ $F -fsyntax-only -H "$OUT/wins.cpp" 2>&1 | grep "^\.* .*\.h" || true)
-echo "$inc" | grep -q "platform/vita/shadow/rendering/renderer.hpp" || { echo "FAIL: renderer.hpp did not resolve into the shadow directory"; exit 1; }
+echo "$inc" | grep -q "vita/shadow/rendering/renderer.hpp" || { echo "FAIL: renderer.hpp did not resolve into the shadow directory"; exit 1; }
 if echo "$inc" | grep -qiE "vulkan|/vk_"; then echo "FAIL: a Vulkan header is reachable from the shadow renderer.hpp:"; echo "$inc" | grep -iE "vulkan|/vk_" | head -5; exit 1; fi
 echo "OK    renderer.hpp resolves into the shadow directory, no Vulkan header reachable"
 # 2b: the poison header stops with the explanatory error
