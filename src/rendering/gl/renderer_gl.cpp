@@ -74,7 +74,13 @@
 namespace wowee::rendering {
 
 void Renderer::beginFrame() {
-    glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
+    // In the world the background is the fog colour, so distant terrain fades into the sky rather than into a dark box.
+    if (terrainRenderer) {
+        const gl::SceneParams sky;
+        glClearColor(sky.fogColor.x, sky.fogColor.y, sky.fogColor.z, 1.0f);
+    } else {
+        glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
+    }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
