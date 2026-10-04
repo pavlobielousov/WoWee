@@ -94,7 +94,8 @@ list(APPEND WOWEE_CLIENT_SOURCES ${WOWEE_CLIENT_RENDERING_SOURCES} ${_gl}
     ${WOWEE_VITA_SRC_DIR}/map_window_stub.cpp
     ${WOWEE_VITA_SRC_DIR}/open_url_vita.cpp
     ${WOWEE_VITA_SRC_DIR}/process_shim.cpp
-    ${WOWEE_VITA_SRC_DIR}/vita_ime.cpp)
+    ${WOWEE_VITA_SRC_DIR}/vita_ime.cpp
+    ${WOWEE_VITA_SRC_DIR}/vita_throw_trace.cpp)
 
 # The shadow headers come FIRST on the include path (they hide upstream's renderer headers), so this is a
 # separate OBJECT library that links wowee_vita_shadow before anything else.
@@ -153,7 +154,10 @@ add_executable(wowee_client
 target_compile_definitions(wowee_client PRIVATE WOWEE_VITA_CLIENT=1)
 target_link_libraries(wowee_client PRIVATE wowee_vita_shadow wowee_core imgui_vita lua51_vita
     ${WOWEE_CORE_LIBS} ${WOWEE_VITA_GL_LIBS} SDL3::SDL3)
-wowee_vita_executable(wowee_client)
+# The client's heap: 288 MB, which only starts under the extended memory mode (ATTRIBUTE2=12 in the VPK below). Without that
+# attribute, anything above about 200 MB makes the app fail to start; with it, vitaGL also gets a 26 MB RAM pool (13 MB before).
+set(WOWEE_VITA_CLIENT_HEAP_MB 288 CACHE STRING "newlib heap of wowee_client in MB (needs the extended memory mode)")
+wowee_vita_executable(wowee_client ${WOWEE_VITA_CLIENT_HEAP_MB})
 
 # The shader cache (VITA-53, src/rendering/gl/shader_cache.cpp) sits in front of vitaGL's shader calls. The build tag is
 # a hash of the vitaGL library the client links, so a different library (its binaries are not interchangeable,
@@ -171,6 +175,8 @@ set(WOWEE_VITA_TEXT_PAD_KB 40 CACHE STRING "padding in the read-only segment of 
 target_sources(wowee_client PRIVATE ${WOWEE_VITA_SRC_DIR}/vita_text_pad.cpp)
 target_compile_definitions(wowee_client PRIVATE WOWEE_VITA_TEXT_PAD_KB=${WOWEE_VITA_TEXT_PAD_KB})
 target_link_options(wowee_client PRIVATE -Wl,-u,wowee_vita_text_pad)
+# Throw trace (src/platform/vita/vita_throw_trace.cpp): log the stack of length_error, bad_alloc and friends at the throw.
+target_link_options(wowee_client PRIVATE -Wl,--wrap=__cxa_throw)
 target_link_options(wowee_client PRIVATE
     -Wl,--wrap=glCreateShader -Wl,--wrap=glShaderSource -Wl,--wrap=glCompileShader
     -Wl,--wrap=glAttachShader -Wl,--wrap=glLinkProgram -Wl,--wrap=glDeleteShader)
@@ -181,6 +187,9 @@ set(WOWEE_VITA_CLIENT_TITLEID "WOWC00001" CACHE STRING "Title ID of the applicat
 unset(VITA_PACK_VPK_FLAGS)
 unset(VITA_MKSFOEX_FLAGS)
 unset(resources)
+# Extended memory mode (VITA-23): without it the app cannot get a newlib heap above about 200 MB (208 MB failed to start,
+# measured). ATTRIBUTE2=12 in param.sfo, which needs the UNSAFE flag the eboot already has.
+set(VITA_MKSFOEX_FLAGS "${VITA_MKSFOEX_FLAGS} -d ATTRIBUTE2=12")
 vita_create_self(client.bin wowee_client UNSAFE)
 vita_create_vpk(wowee_client.vpk ${WOWEE_VITA_CLIENT_TITLEID} client.bin
     VERSION "00.01"
@@ -188,4 +197,9 @@ vita_create_vpk(wowee_client.vpk ${WOWEE_VITA_CLIENT_TITLEID} client.bin
     FILE ${WOWEE_VITA_RES_DIR}/sce_sys/icon0.png sce_sys/icon0.png
          ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
          ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png
-         ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
+         ${WOWEE_VITA_RES_DIR}/sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml
+         # Files the client opens relative to its own folder (app0:assets/...): the login backdrop and the window icon.
+         ${WOWEE_ROOT_DIR}/assets/krayonsignin.png assets/krayonsignin.png
+         ${WOWEE_ROOT_DIR}/assets/krayonload.png assets/krayonload.png
+         ${WOWEE_ROOT_DIR}/assets/Wowee.png assets/Wowee.png
+         ${WOWEE_ROOT_DIR}/assets/grass_biomes.json assets/grass_biomes.json)

@@ -16,7 +16,11 @@ elf="${2:?usage: parse_core.sh <core.psp2dmp> <elf>}"
 core_rel=$(vita_rel "$core"); elf_rel=$(vita_rel "$elf")
 runtime=$(vita_runtime)
 
-exec "$runtime" run --rm -v "$VITA_ROOT:/workspace" "$VITASDK_IMAGE" sh -c '
+# Apple's `container` gives a VM 1 GB by default, and objdump of a big debug ELF (the client's is 380 MB) is killed by it.
+limits=""
+[ "$runtime" = container ] && limits="--memory ${MEMORY:-8G} --cpus ${CPUS:-4}"
+# shellcheck disable=SC2086
+exec "$runtime" run --rm $limits -v "$VITA_ROOT:/workspace" "$VITASDK_IMAGE" sh -c '
     set -e
     d=$(mktemp -d)
     git clone -q https://github.com/xyzz/vita-parse-core "$d"

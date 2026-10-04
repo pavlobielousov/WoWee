@@ -13,7 +13,11 @@
 #include <psp2/power.h>
 #include <psp2/sysmodule.h>
 
+#include <cstdio>
 #include <cstdlib>
+#include <malloc.h>
+#include <new>
+#include <psp2/kernel/clib.h>
 #include <string>
 
 // newlib reads these before main(), so they are compile-time values and env.txt cannot change
@@ -50,9 +54,31 @@ InitReport g_report;
 
 }  // namespace
 
+// Called by operator new when malloc fails, before the std::bad_alloc is thrown: says how full the heap was (VITA-23).
+// Written with sceClibPrintf into a fixed buffer, because the logger allocates and this is exactly when nothing can.
+void onAllocationFailed() {
+    static bool reporting = false;
+    if (!reporting) {
+        reporting = true;
+        const struct mallinfo heap = mallinfo();
+        char line[160];
+        std::snprintf(line, sizeof line, "wowee: ALLOCATION FAILED: heap in use %u MB, free in arena %u MB, arena %u MB of %d MB\n",
+                      static_cast<unsigned>(heap.uordblks) / (1024 * 1024), static_cast<unsigned>(heap.fordblks) / (1024 * 1024),
+                      static_cast<unsigned>(heap.arena) / (1024 * 1024), WOWEE_VITA_HEAP_MB);
+        sceClibPrintf("%s", line);
+        if (FILE* f = std::fopen("ux0:data/wowee/alloc_failed.txt", "a")) {
+            std::fputs(line, f);
+            std::fclose(f);
+        }
+        reporting = false;
+    }
+    throw std::bad_alloc();
+}
+
 void initProcess() {
     if (g_report.done) return;
     g_report.done = true;
+    std::set_new_handler(&onAllocationFailed);
 
     // The stock maximum for each clock. Errors are kept for the report, not acted on: a Vita
     // that refuses a clock still runs, just slower.
@@ -75,12 +101,22 @@ void initProcess() {
     // extraction is there yet (selectUserDataPath in main.cpp only sets this when one is).
     // env.txt can point it at uma0: (USB / SD2Vita) or anywhere else.
     core::setEnvVar("WOW_DATA_PATH", kDefaultDataRoot, /*overwrite=*/false);
+
+    // HOME: the Warden handler (and anything else that follows the XDG convention) keeps its cache under $HOME, and the
+    // fallback is a path relative to the working directory, which is app0: and read-only (VITA-23).
+    core::setEnvVar("HOME", kAppDir, /*overwrite=*/false);
+#ifdef WOWEE_VITA_CLIENT
+    // The stock FrameXML interface (139 files, its Lua state and widget tree) needs more memory than a Vita has: it grew the
+    // heap from 64 MB to the whole 288 MB before it finished loading (measured, VITA-23). Off until VITA-28 makes it fit;
+    // WOWEE_LOAD_FRAMEXML=1 in env.txt turns it on again for the measurement.
+    core::setEnvVar("WOWEE_LOAD_FRAMEXML", "0", /*overwrite=*/false);
+#endif
 }
 
 void logStartupReport() {
     const InitReport& r = g_report;
     // WARNING on purpose: the default log level is WARNING, and this is the line a bug report needs.
-    LOG_WARNING("Vita: heap ", WOWEE_VITA_HEAP_MB, " MB, main stack ", WOWEE_VITA_STACK_MB, " MB");
+    LOG_WARNING("Vita: heap ", _newlib_heap_size_user / (1024 * 1024), " MB, main stack ", WOWEE_VITA_STACK_MB, " MB");
     LOG_WARNING("Vita: clocks arm=", r.clockArm, " bus=", r.clockBus, " gpu=", r.clockGpu,
                 " xbar=", r.clockXbar, " (0 = set; sysmodule net=", r.sysmoduleNet,
                 " sceNetInit=", r.netInit, " sceNetCtlInit=", r.netCtlInit, ")");

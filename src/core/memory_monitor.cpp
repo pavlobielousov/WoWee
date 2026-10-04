@@ -17,6 +17,10 @@
 #include <sys/sysinfo.h>
 #endif
 
+#ifdef __vita__
+extern "C" int _newlib_heap_size_user;  // defined by every Vita executable
+#endif
+
 namespace wowee {
 namespace core {
 
@@ -73,11 +77,8 @@ void MemoryMonitor::initialize() {
         LOG_WARNING("Could not detect system RAM, assuming 16GB");
     }
 #elif defined(__vita__)
-#ifdef WOWEE_VITA_HEAP_MB
-    totalRAM_ = static_cast<size_t>(WOWEE_VITA_HEAP_MB) * 1024 * 1024;
-#else
-    totalRAM_ = 192u * 1024 * 1024;
-#endif
+    // The heap each Vita executable asks for (src/platform/vita/vita_main.cpp; the client's differs from the others').
+    totalRAM_ = static_cast<size_t>(_newlib_heap_size_user);
     LOG_INFO("Vita heap: ", totalRAM_ / (1024 * 1024), " MB");
 #else
     struct sysinfo info;

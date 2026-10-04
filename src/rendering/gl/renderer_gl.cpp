@@ -29,6 +29,8 @@
 #include "rendering/post_process_pipeline.hpp"
 #include "game/zone_manager.hpp"
 
+#include <malloc.h>
+
 #include "rendering/volumetric_fog.hpp"
 #include "rendering/sun_shafts.hpp"
 #include "rendering/screen_capture.hpp"
@@ -80,7 +82,11 @@ void Renderer::endFrame() {
     vglSwapBuffers(platform::vita::imeActive() ? GL_TRUE : GL_FALSE);
     // Warning level on purpose: the default log level hides INFO, and this line is the Vita3K smoke test's proof that
     // the main loop runs on vitaGL (it cannot read pixels back).
-    if (frames++ % 300 == 0) LOG_WARNING("Vita frames presented: ", frames);
+    if (frames++ % 300 == 0) {
+        const struct mallinfo heap = mallinfo();  // newlib: the whole heap is one arena of WOWEE_VITA_HEAP_MB
+        LOG_WARNING("Vita frames presented: ", frames, ", heap in use ", static_cast<unsigned>(heap.uordblks) / (1024 * 1024),
+                    " MB of ", static_cast<unsigned>(heap.arena) / (1024 * 1024), " MB arena");
+    }
 }
 
 void Renderer::endUploadBatch() { }
