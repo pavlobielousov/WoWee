@@ -2,6 +2,7 @@
 // The Vita's copy: every declaration that mentions Vulkan is removed (ADR-001, VITA-52).
 #pragma once
 
+#include "rendering/gl/scene_params.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/spatial_grid.hpp"
 
@@ -417,6 +418,11 @@ struct M2ParamsUBO {
  */
 class M2Renderer {
 public:
+    // ---- Vita (VITA-19): the GL half, src/rendering/gl/m2_renderer_gl.cpp ----
+    bool glInitialize(pipeline::AssetManager* assets);
+    void glRender(const gl::SceneParams& scene);
+    [[nodiscard]] bool glReady() const;
+    [[nodiscard]] uint32_t glInstanceCount() const;
     M2Renderer();
     ~M2Renderer();
 
@@ -712,6 +718,8 @@ public:
     void setPredecodedBLPCache(std::unordered_map<std::string, pipeline::BLPImage>* cache) { predecodedBLPCache_ = cache; }
 
 private:
+    struct Gl;
+    std::unique_ptr<Gl> gl_;
     bool initialized_ = false;
     bool insideInterior = false;
     pipeline::AssetManager* assetManager = nullptr;

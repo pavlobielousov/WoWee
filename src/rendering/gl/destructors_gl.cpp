@@ -34,7 +34,6 @@ Clouds::~Clouds() = default;
 FootprintRenderer::~FootprintRenderer() = default;
 LensFlare::~LensFlare() = default;
 Lightning::~Lightning() = default;
-M2Renderer::~M2Renderer() = default;
 Minimap::~Minimap() = default;
 MountDust::~MountDust() = default;
 PerformanceHUD::~PerformanceHUD() = default;

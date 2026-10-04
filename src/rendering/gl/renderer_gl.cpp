@@ -204,6 +204,13 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             return false;
         }
     }
+    if (!m2Renderer) {
+        m2Renderer = std::make_unique<M2Renderer>();
+        if (!m2Renderer->glInitialize(assetManager)) {
+            LOG_ERROR("M2 renderer (GL) did not start, drawing no doodads");
+            m2Renderer.reset();
+        }
+    }
     if (!terrainManager) {
         terrainManager = std::make_unique<TerrainManager>();
         if (!terrainManager->initialize(assetManager, terrainRenderer.get())) {
@@ -212,6 +219,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             return false;
         }
         if (cameraController) cameraController->setTerrainManager(terrainManager.get());
+        if (m2Renderer) terrainManager->setM2Renderer(m2Renderer.get());
     }
     setActiveMapName(mapName);
     return true;
@@ -274,6 +282,7 @@ void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]]
     scene.fogStart = viewDistance_ * 0.45f;
     scene.fogEnd = viewDistance_ * 0.95f;
     terrainRenderer->glRender(scene);
+    if (m2Renderer && m2Renderer->glReady()) m2Renderer->glRender(scene);
 }
 
 void Renderer::resetCombatVisualState() { }
