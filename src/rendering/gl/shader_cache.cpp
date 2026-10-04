@@ -42,6 +42,7 @@ std::set<std::string> g_usedKeys;
 ShaderCacheStats g_stats;
 bool g_enabled = true;
 std::string g_dir;
+std::string g_tag = WOWEE_VITA_GL_TAG;
 
 uint64_t nowUs() { return sceKernelGetProcessTimeWide(); }
 
@@ -88,6 +89,8 @@ const std::string& shaderCacheDir() {
 
 void setShaderCacheEnabled(bool enabled) { g_enabled = enabled; }
 
+void setShaderCompilerLevel(int level) { g_tag = std::string(WOWEE_VITA_GL_TAG) + "-o" + std::to_string(level); }
+
 void clearShaderCache() {
     std::error_code ec;
     for (fs::directory_iterator it(shaderCacheDir(), ec), end; !ec && it != end; it.increment(ec)) {
@@ -110,6 +113,20 @@ void sweepShaderCache() {
 }
 
 const ShaderCacheStats& shaderCacheStats() { return g_stats; }
+
+bool shaderCacheHas(const char* vertexSource, const char* fragmentSource) {
+    std::string payload;
+    return readEntry(sc::cacheKey(sc::Stage::Vertex, vertexSource, g_tag), payload) &&
+           readEntry(sc::cacheKey(sc::Stage::Fragment, fragmentSource, g_tag), payload);
+}
+
+bool shaderCacheEmpty() {
+    std::error_code ec;
+    for (fs::directory_iterator it(shaderCacheDir(), ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->path().extension() == ".bin") return false;
+    }
+    return true;
+}
 
 }  // namespace wowee::rendering::gl
 
@@ -152,7 +169,7 @@ void __wrap_glCompileShader(GLuint shader) {
         return;
     }
     ShaderInfo& info = it->second;
-    info.key = sc::cacheKey(stageOf(info.type), info.source, WOWEE_VITA_GL_TAG);
+    info.key = sc::cacheKey(stageOf(info.type), info.source, g_tag);
     g_usedKeys.insert(info.key);
     std::string payload;
     if (readEntry(info.key, payload) && !payload.empty()) {
@@ -162,6 +179,8 @@ void __wrap_glCompileShader(GLuint shader) {
         ++g_stats.hits;
         return;
     }
+    LOG_WARNING("Shader cache miss: ", info.type == GL_VERTEX_SHADER ? "vertex" : "fragment", " shader of ",
+                info.source.size(), " chars, key ", info.key);
     // A miss: vitaGL compiles at glLinkProgram, so the time is taken there.
     __real_glCompileShader(shader);
     info.compiledByUs = true;

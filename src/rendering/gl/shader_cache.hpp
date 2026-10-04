@@ -25,6 +25,10 @@ struct ShaderCacheStats {
 /// Directory of the cache. Created on first use.
 const std::string& shaderCacheDir();
 
+/// The optimisation level the run-time shader compiler was set to (a shark_opt value). Part of every cache key: a
+/// different level produces a different binary. Call before the first shader is compiled.
+void setShaderCompilerLevel(int level);
+
 /// Turn the cache on/off (on by default). Off: the wrappers pass straight through.
 void setShaderCacheEnabled(bool enabled);
 
@@ -36,5 +40,12 @@ void clearShaderCache();
 void sweepShaderCache();
 
 const ShaderCacheStats& shaderCacheStats();
+
+/// Whether both shaders of a program are in the cache (a valid entry each). Used to decide whether building it will be
+/// instant, so the progress screen is shown only for work that takes time.
+bool shaderCacheHas(const char* vertexSource, const char* fragmentSource);
+
+/// Whether the cache holds any entry at all (a first run).
+bool shaderCacheEmpty();
 
 }  // namespace wowee::rendering::gl

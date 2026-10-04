@@ -14,6 +14,7 @@
 
 #include "core/logger.hpp"
 #include "platform/vita/ime_dialog.hpp"
+#include "rendering/gl/shader_build.hpp"
 #include "rendering/gl/shader_cache.hpp"
 #include "rendering/imgui_backend.hpp"
 #include "rendering/ui_texture.hpp"
@@ -24,6 +25,7 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
 #include <vitaGL.h>
+#include <vitashark.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -227,6 +229,15 @@ bool Window::initialize() {
 
     // GL work stays on this thread (ADR-001). vglInit* returns GL_TRUE ONLY when the requested resolution had to be
     // lowered and GL_FALSE on success (DEV_SETUP section 19), so success is judged by state.
+    // The run-time shader compiler's optimisation level (VITA-53). vitaGL's own default is the fastest-math level and
+    // compiled the skinned-character stand-in in 2.1 s on the device; SHARK_OPT_DEFAULT (O2, what GlProbe used) takes
+    // 1.05 s with 4.3 s against 5.8 s for the set. WOWEE_SHARK_OPT=0..4 in env.txt overrides it for comparison
+    // (SLOW, SAFE, DEFAULT, FAST, UNSAFE). The level is part of every cache key.
+    int sharkLevel = SHARK_OPT_DEFAULT;
+    if (const char* opt = std::getenv("WOWEE_SHARK_OPT"); opt && *opt >= '0' && *opt <= '4') sharkLevel = *opt - '0';
+    LOG_WARNING("Shader compiler optimisation level ", sharkLevel);
+    vglSetupRuntimeShaderCompiler(static_cast<shark_opt>(sharkLevel), 0, 0, 0);
+    rendering::gl::setShaderCompilerLevel(sharkLevel);
     const GLboolean resolutionFell = vglInitExtended(0, kScreenW, kScreenH, kRamThresholdBytes, SCE_GXM_MULTISAMPLE_NONE);
     if (vglMemTotal(VGL_MEM_VRAM) == 0 || glGetString(GL_VERSION) == nullptr) {
         LOG_ERROR("vitaGL did not initialise (no memory pools, no GL_VERSION)");
@@ -252,6 +263,9 @@ bool Window::initialize() {
         LOG_WARNING("WOWEE_SHADER_REBUILD=1: clearing the shader cache");
         rendering::gl::clearShaderCache();
     }
+
+    // Every shader program, from the cache or compiled now behind a progress screen (VITA-53).
+    rendering::gl::buildShaders();
 
     vkContext = std::make_unique<rendering::VkContext>();
     vkContext->up = true;
