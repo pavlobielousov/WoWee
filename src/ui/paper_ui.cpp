@@ -94,6 +94,9 @@ void PaperUI::begin(float deltaSeconds, float scale) {
     firstField_ = lastField_ = 0;
     takeFocusNext_ = false;
     focusLastAtEnd_ = false;
+#ifdef __vita__
+    nav_.beginFrame();
+#endif
 }
 
 void PaperUI::end() {
@@ -110,6 +113,20 @@ void PaperUI::end() {
         focusLastAtEnd_ = false;
     }
 
+#ifdef __vita__
+    {
+        // While a dropdown is down its rows are the only targets (their rectangles, as dropdown() lays them out).
+        std::vector<NavRect> rows;
+        if (!popups_.empty()) {
+            const PopupDraw& p = popups_.back();
+            for (std::size_t i = 0; i < p.items.size(); ++i) {
+                const float y0 = p.a.y + px(4) + static_cast<float>(i) * p.rowHeight;
+                rows.push_back({p.a.x, y0, p.b.x, y0 + p.rowHeight});
+            }
+        }
+        nav_.endFrame(overlay_, popups_.empty() ? nullptr : &rows);
+    }
+#endif
     for (const PopupDraw& p : popups_) {
         ImDrawList* dl = overlay_;
         dl->AddRectFilled(ImVec2(p.a.x + px(3), p.a.y + px(4)),
@@ -180,6 +197,9 @@ bool PaperUI::pressed() const {
 }
 
 bool PaperUI::hovered(ImVec2 a, ImVec2 b) {
+#ifdef __vita__
+    nav_.addRect(a.x, a.y, b.x, b.y);  // every control asks this once: the gamepad's list of targets (VITA-17)
+#endif
     const ImVec2 m = ImGui::GetIO().MousePos;
     return m.x >= a.x && m.x < b.x && m.y >= a.y && m.y < b.y;
 }

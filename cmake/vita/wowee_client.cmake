@@ -162,6 +162,15 @@ file(SHA256 "${WOWEE_VITAGL_FILE}" _vgl_hash)
 string(SUBSTRING "${_vgl_hash}" 0 16 WOWEE_VITA_GL_TAG)
 set_source_files_properties(${WOWEE_ROOT_DIR}/src/rendering/gl/shader_cache.cpp PROPERTIES
     COMPILE_DEFINITIONS "WOWEE_VITA_GL_TAG=\"${WOWEE_VITA_GL_TAG}\"")
+# vita-elf-create appends the SCE import data (about 4.7 KB) after the text segment and fails with "Cannot allocate N bytes
+# for SCE data at end of segment 0; segment 1 overlaps" when the data segment (aligned to 64 KB) starts less than that after
+# the end of the code and constants: a coin flip on the code size (GlProbe hit it; VITA-17's few hundred lines did; a
+# larger page alignment turns it into "overlapping sections" instead). The padding moves the end of the segment. When the
+# error comes back after code growth, raise WOWEE_VITA_TEXT_PAD_KB by 16 (or 32), or lower it, until the link passes.
+set(WOWEE_VITA_TEXT_PAD_KB 40 CACHE STRING "padding in the read-only segment of wowee_client, in KB (see CMake comment)")
+target_sources(wowee_client PRIVATE ${WOWEE_VITA_SRC_DIR}/vita_text_pad.cpp)
+target_compile_definitions(wowee_client PRIVATE WOWEE_VITA_TEXT_PAD_KB=${WOWEE_VITA_TEXT_PAD_KB})
+target_link_options(wowee_client PRIVATE -Wl,-u,wowee_vita_text_pad)
 target_link_options(wowee_client PRIVATE
     -Wl,--wrap=glCreateShader -Wl,--wrap=glShaderSource -Wl,--wrap=glCompileShader
     -Wl,--wrap=glAttachShader -Wl,--wrap=glLinkProgram -Wl,--wrap=glDeleteShader)
