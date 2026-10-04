@@ -1,3 +1,6 @@
+#ifdef __vita__
+#include "platform/vita/ime_dialog.hpp"
+#endif
 #include "ui/paper_ui.hpp"
 
 #include "ui/interface_fonts.hpp"
@@ -756,6 +759,10 @@ PaperUI::FieldResult PaperUI::field(const char* idStr, ImVec2 a, ImVec2 b, TextE
         justFocused_ = 0;
         active_ = id;
         dragging_ = id;
+#ifdef __vita__
+        // No keyboard on the Vita: the system dialog opens with this field's text (VITA-55).
+        platform::vita::imeRequest(edit.text(), opts.password);
+#endif
         const float dx = io.MousePos.x - in0.x + state.scroll;
         const int clicks = ImGui::GetMouseClickedCount(ImGuiMouseButton_Left);
         if (clicks >= 3) {

@@ -4,6 +4,7 @@
 #include "rendering/renderer.hpp"
 
 #include "core/logger.hpp"
+#include "platform/vita/ime_dialog.hpp"
 #include "core/window.hpp"
 #include "rendering/imgui_backend.hpp"
 #include "rendering/animation_controller.hpp"
@@ -50,6 +51,7 @@
 #include "rendering/lens_flare.hpp"
 #include <imgui.h>
 #include <imgui_impl_opengl3.h>
+#include <SDL3/SDL.h>
 #include <vitaGL.h>
 
 namespace wowee::rendering {
@@ -72,7 +74,9 @@ void Renderer::endFrame() {
     if (ImGui::GetCurrentContext()) {
         if (ImDrawData* draw = ImGui::GetDrawData()) ImGui_ImplOpenGL3_RenderDrawData(draw);
     }
-    vglSwapBuffers(GL_FALSE);
+    // The on-screen keyboard is a system dialog (platform/vita/ime_dialog.hpp). vitaGL draws it only when told a
+    // dialog is active at the swap; without this it opens invisibly and takes the touch input.
+    vglSwapBuffers(platform::vita::imeActive() ? GL_TRUE : GL_FALSE);
     // Warning level on purpose: the default log level hides INFO, and this line is the Vita3K smoke test's proof that
     // the main loop runs on vitaGL (it cannot read pixels back).
     if (frames++ % 300 == 0) LOG_WARNING("Vita frames presented: ", frames);
