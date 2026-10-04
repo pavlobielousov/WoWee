@@ -1,4 +1,5 @@
 // See gl_texture.hpp (VITA-15).
+#include <cstdlib>
 #include "rendering/gl/gl_texture.hpp"
 
 #include "core/logger.hpp"
@@ -48,7 +49,9 @@ GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat) 
         while (first > 0 && std::max(1, image.width >> first) < 4 && std::max(1, image.height >> first) < 4) --first;
         const std::size_t blockBytes = format == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT ? 8 : 16;
         int uploaded = 0;
-        for (int level = first; level < levels; ++level) {
+        // Diagnostic (VITA-18): WOWEE_GL_BASE_ONLY=1 uploads just the first level, to tell mip trouble from filtering trouble.
+        static const bool baseOnly = std::getenv("WOWEE_GL_BASE_ONLY") != nullptr;
+        for (int level = first; level < (baseOnly ? first + 1 : levels); ++level) {
             const int w = std::max(1, image.width >> level);
             const int h = std::max(1, image.height >> level);
             const std::vector<uint8_t>& data = image.mipmaps[static_cast<std::size_t>(level)];
