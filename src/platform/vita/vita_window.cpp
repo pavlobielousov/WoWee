@@ -235,11 +235,12 @@ bool Window::initialize() {
     }
     const char* renderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-    LOG_INFO("vitaGL: ", renderer ? renderer : "?", ", ", version ? version : "?");
+    // Warning level on purpose: the default log level hides INFO and these numbers are VITA-13's device evidence.
+    LOG_WARNING("vitaGL: ", renderer ? renderer : "?", ", ", version ? version : "?");
     static const char* kPoolNames[] = {"CDRAM", "RAM", "PHYCONT", "CDLG", "newlib"};
     for (int pool = 0; pool < 5; ++pool) {
         const auto type = static_cast<vglMemType>(pool);
-        LOG_INFO("vitaGL memory ", kPoolNames[pool], ": ",
+        LOG_WARNING("vitaGL memory ", kPoolNames[pool], ": ",
                  static_cast<unsigned long long>(vglMemFree(type) / 1024), " KB free of ",
                  static_cast<unsigned long long>(vglMemTotal(type) / 1024), " KB");
     }
@@ -249,7 +250,7 @@ bool Window::initialize() {
     uiTextures = std::make_unique<rendering::VkUiTextureService>(*vkContext);
     imguiBackend = std::make_unique<rendering::VkImGuiBackend>(vkContext.get());
 
-    LOG_INFO("Window initialized successfully (vitaGL)");
+    LOG_WARNING("Window initialized successfully (vitaGL)");
     return true;
 }
 
