@@ -236,8 +236,16 @@ public:
     /**
      * Set streaming parameters
      */
+#ifdef __vita__
+    // A tile costs about 16 MB of heap (mesh, ADT data, doodad lists) and 6 MB of GPU buffers; the world loader asks for a radius of
+    // 4 (81 tiles) and ran the Vita out of memory after 13 (VITA-18). 1 is 3x3 tiles. Raise it only with a memory budget behind it.
+    static constexpr int kVitaMaxLoadRadius = 1;
+    void setLoadRadius(int radius) { loadRadius = radius < kVitaMaxLoadRadius ? radius : kVitaMaxLoadRadius; }
+    void setUnloadRadius(int radius) { unloadRadius = radius < kVitaMaxLoadRadius + 2 ? radius : kVitaMaxLoadRadius + 2; }
+#else
     void setLoadRadius(int radius) { loadRadius = radius; }
     void setUnloadRadius(int radius) { unloadRadius = radius; }
+#endif
     void setStreamingEnabled(bool enabled) { streamingEnabled = enabled; }
     void setUpdateInterval(float seconds) { updateInterval = seconds; }
     void setTaxiStreamingMode(bool enabled) { taxiStreamingMode_ = enabled; }

@@ -2,6 +2,7 @@
 // The Vita's copy: every declaration that mentions Vulkan is removed (ADR-001, VITA-52).
 #pragma once
 
+#include "rendering/gl/scene_params.hpp"
 #include <cmath>
 
 #include "core/size_utils.hpp"
@@ -67,6 +68,11 @@ struct TerrainChunkGPU {
  */
 class TerrainRenderer {
 public:
+    // ---- Vita (VITA-18): the GL half, src/rendering/gl/terrain_renderer_gl.cpp ----
+    bool glInitialize(pipeline::AssetManager* assets);
+    /// Draw the loaded chunks. `scene` carries the camera matrices, the light and the fog.
+    void glRender(const gl::SceneParams& scene);
+    [[nodiscard]] bool glReady() const;
     TerrainRenderer();
     ~TerrainRenderer();
 
@@ -142,6 +148,8 @@ public:
     void setRtScene(RtScene* scene) { rtScene_ = scene; }
 
 private:
+    struct Gl;
+    std::unique_ptr<Gl> gl_;
     TerrainChunkGPU uploadChunk(const pipeline::ChunkMesh& chunk);
     bool isChunkVisible(const TerrainChunkGPU& chunk, const Frustum& frustum);
     void calculateBoundingSphere(TerrainChunkGPU& chunk, const pipeline::ChunkMesh& meshChunk);

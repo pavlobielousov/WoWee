@@ -37,4 +37,8 @@ void WMORenderer::setInstanceIsTransport([[maybe_unused]] uint32_t instanceId, [
 
 void WMORenderer::setInstanceTransform([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] const glm::mat4& transform) { }
 
+pipeline::BLPImage WMORenderer::generateNormalHeightMapPixels([[maybe_unused]] const uint8_t* pixels, [[maybe_unused]] uint32_t width, [[maybe_unused]] uint32_t height, [[maybe_unused]] float& outVariance) { return {}; }
+
+void WMORenderer::removeInstances([[maybe_unused]] const std::vector<uint32_t>& instanceIds) { }
+
 }  // namespace wowee::rendering

@@ -51,4 +51,8 @@ void M2Renderer::setSkipWallCollision([[maybe_unused]] uint32_t instanceId, [[ma
 
 std::optional<uint32_t> M2Renderer::soleSequenceId([[maybe_unused]] uint32_t instanceId) const { return {}; }
 
+std::vector<uint32_t> M2Renderer::drainReapedModelIds() { return {}; }
+
+void M2Renderer::removeInstances([[maybe_unused]] const std::vector<uint32_t>& instanceIds) { }
+
 }  // namespace wowee::rendering

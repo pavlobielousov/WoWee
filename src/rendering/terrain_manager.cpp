@@ -5,7 +5,9 @@
 #include "pipeline/adt_alpha.hpp"
 #include "pipeline/grass_profile.hpp"
 #include "rendering/terrain_renderer.hpp"
+#ifndef __vita__
 #include "rendering/vk_context.hpp"
+#endif
 #include "rendering/water_renderer.hpp"
 #include "rendering/m2_renderer.hpp"
 #include "rendering/m2_model_classifier.hpp"
@@ -51,6 +53,19 @@
 #include <array>
 #include <cstring>
 
+#endif
+
+#ifdef __vita__
+// The Vita's GL renderer uploads synchronously on the main thread: there is no Vulkan context and no upload batch to open or
+// wait for, so the batch calls below go to a context that does nothing (VITA-18).
+namespace {
+struct UploadBatchContext {
+    void pollUploadBatches() {}
+    void beginUploadBatch() {}
+    void endUploadBatch() {}
+    void endUploadBatchSync() {}
+};
+}  // namespace
 #endif
 
 namespace wowee {
@@ -1014,8 +1029,10 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
 
         // Ensure M2 renderer has asset manager
         if (m2Renderer && assetManager) {
+#ifndef __vita__  // the Vita's GL renderers are given the asset manager when they are created (VITA-18/19)
             if (!m2Renderer->initialize(nullptr, VK_NULL_HANDLE, assetManager))
                 LOG_WARNING("M2Renderer terrain re-init failed");
+#endif
         }
 
         ft.phase = FinalizationPhase::M2_MODELS;
@@ -1110,8 +1127,10 @@ bool TerrainManager::advanceFinalization(FinalizingTile& ft) {
     case FinalizationPhase::WMO_MODELS: {
         // Upload multiple WMO models per call (batched GPU uploads)
         if (wmoRenderer && assetManager) {
+#ifndef __vita__  // the Vita's GL renderers are given the asset manager when they are created (VITA-18/19)
             if (!wmoRenderer->initialize(nullptr, VK_NULL_HANDLE, assetManager))
                 LOG_WARNING("WMORenderer terrain re-init failed");
+#endif
             // Diffuse decode and normal/height generation were completed by the
             // terrain worker. The main thread only uploads those prepared pixels.
             wmoRenderer->setPredecodedBLPCache(&pending->preloadedWMOTextures);
@@ -1442,7 +1461,12 @@ void TerrainManager::processReadyTiles() {
         }
     }
 
+    #ifdef __vita__
+    static UploadBatchContext noUploadBatches;
+    UploadBatchContext* vkCtx = terrainRenderer ? &noUploadBatches : nullptr;
+#else
     VkContext* vkCtx = terrainRenderer ? terrainRenderer->getVkContext() : nullptr;
+#endif
 
     // Reclaim completed async uploads from previous frames (non-blocking)
     if (vkCtx) vkCtx->pollUploadBatches();
@@ -1574,7 +1598,12 @@ void TerrainManager::processOneReadyTile() {
     }
     // Finalize ONE tile completely, then return so caller can update the screen
     if (!finalizingTiles_.empty()) {
-        VkContext* vkCtx = terrainRenderer ? terrainRenderer->getVkContext() : nullptr;
+        #ifdef __vita__
+    static UploadBatchContext noUploadBatches;
+    UploadBatchContext* vkCtx = terrainRenderer ? &noUploadBatches : nullptr;
+#else
+    VkContext* vkCtx = terrainRenderer ? terrainRenderer->getVkContext() : nullptr;
+#endif
         if (vkCtx) vkCtx->beginUploadBatch();
 
         auto& ft = finalizingTiles_.front();
