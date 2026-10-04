@@ -674,7 +674,13 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
     if (!workerRunning.load()) return nullptr;
 
     // Pre-load WMOs (CPU: read files, parse models and groups)
+#ifdef __vita__
+    // No WMO renderer on the Vita yet (VITA-19): parsing the buildings and their doodads would only cost memory (one
+    // Goldshire tile took 105 MB while being prepared, with 8 WMOs and 6500 doodads).
+    if (wmoRenderer && !pending->terrain.wmoPlacements.empty()) {
+#else
     if (!pending->terrain.wmoPlacements.empty()) {
+#endif
         for (const auto& placement : pending->terrain.wmoPlacements) {
             if (!workerRunning.load()) return nullptr;
             if (placement.nameId >= pending->terrain.wmoNames.size()) continue;
@@ -948,6 +954,27 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
              pending->wmoModels.size(), " WMOs, ",
              pending->wmoDoodads.size(), " WMO doodads, ",
              pending->preloadedTextures.size(), " textures");
+#ifdef __vita__
+    {
+        // Where the ~17 MB of a prepared tile goes (VITA-19 memory work).
+        auto texBytes = [](const std::unordered_map<std::string, pipeline::BLPImage>& m) {
+            size_t b = 0;
+            for (const auto& kv : m) {
+                b += kv.second.data.size();
+                for (const auto& mip : kv.second.mipmaps) b += mip.size();
+            }
+            return b / 1024;
+        };
+        size_t m2v = 0, m2i = 0, wmoDoodadV = 0;
+        for (const auto& m : pending->m2Models) { m2v += m.model.vertices.size() * sizeof(pipeline::M2Vertex); m2i += m.model.indices.size() * 2; }
+        for (const auto& m : pending->wmoDoodads) wmoDoodadV += m.model.vertices.size() * sizeof(pipeline::M2Vertex);
+        LOG_WARNING("Prepared tile [", x, ",", y, "] KB: terrainTex ", texBytes(pending->preloadedTextures), " m2Tex ",
+                    texBytes(pending->preloadedM2Textures), " wmoTex ", texBytes(pending->preloadedWMOTextures), " wmoNormal ",
+                    texBytes(pending->preloadedWMONormalMaps), " | m2Models ", pending->m2Models.size(), " (verts ", m2v / 1024,
+                    " idx ", m2i / 1024, ") wmos ", pending->wmoModels.size(), " wmoDoodads ", pending->wmoDoodads.size(),
+                    " (verts ", wmoDoodadV / 1024, ") placements ", pending->m2Placements.size());
+    }
+#endif
 
     return pending;
 }
@@ -1450,7 +1477,14 @@ void TerrainManager::processReadyTiles() {
     // Keep them in pendingTiles so streamTiles() won't re-enqueue them.
     {
         std::lock_guard<std::mutex> lock(queueMutex);
+#ifdef __vita__
+        // One tile finalizing at a time, the rest wait in readyQueue (which stops the workers at maxReadyQueueSize_). Moving
+        // them all across at once let the workers prepare every tile of the area in memory - about 17 MB each with its
+        // doodad models - before the first was uploaded, and the heap ran out (VITA-19).
+        while (!readyQueue.empty() && finalizingTiles_.empty()) {
+#else
         while (!readyQueue.empty()) {
+#endif
             auto pending = readyQueue.front();
             readyQueue.pop();
             if (pending) {

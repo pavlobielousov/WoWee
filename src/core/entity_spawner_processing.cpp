@@ -290,6 +290,11 @@ void EntitySpawner::processAsyncNpcCompositeResults(bool unlimited) {
 }
 
 void EntitySpawner::processCreatureSpawnQueue(bool unlimited) {
+#ifdef __vita__
+    // The Vita has no character renderer yet (VITA-20): preparing a creature model (M2, skin textures decoded to RGBA) would
+    // only fill a heap that has no room to spare, and ran it out of memory after world entry.
+    if (!renderer_ || !renderer_->getCharacterRenderer()) return;
+#endif
     auto startTime = std::chrono::steady_clock::now();
     // Budget: max 2ms per frame for creature spawning to prevent stutter.
     // In unlimited mode (load screen), process everything without budget cap.
