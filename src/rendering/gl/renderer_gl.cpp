@@ -57,6 +57,14 @@
 #include <SDL3/SDL.h>
 #include <vitaGL.h>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
 namespace wowee::rendering {
 
 void Renderer::beginFrame() {
@@ -66,7 +74,28 @@ void Renderer::beginFrame() {
 
 void Renderer::beginUploadBatch() { }
 
-bool Renderer::captureScreenshot([[maybe_unused]] const std::string& outputPath) { return false; }
+namespace {
+// A screenshot is taken at the end of the frame, after the interface has been drawn and before the swap. Asked for
+// through Renderer::captureScreenshot, or by WOWEE_SHOT_FRAME=<n> in env.txt (frame n, to ux0:data/wowee/shot.png): the
+// way to see what the Vita draws without a camera (VITA-17).
+std::string g_shotPath;
+
+bool writeScreenshot(const std::string& path) {
+    constexpr int w = 960, h = 544;
+    std::vector<unsigned char> px(static_cast<std::size_t>(w) * h * 4), flipped(px.size());
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    for (int y = 0; y < h; ++y) {  // GL rows run bottom to top
+        std::copy_n(px.data() + static_cast<std::size_t>(h - 1 - y) * w * 4, w * 4, flipped.data() + static_cast<std::size_t>(y) * w * 4);
+    }
+    for (std::size_t i = 3; i < flipped.size(); i += 4) flipped[i] = 255;
+    return stbi_write_png(path.c_str(), w, h, 4, flipped.data(), w * 4) != 0;
+}
+}  // namespace
+
+bool Renderer::captureScreenshot(const std::string& outputPath) {
+    g_shotPath = outputPath;
+    return true;
+}
 
 void Renderer::clearSelectionCircle() { }
 
@@ -79,6 +108,19 @@ void Renderer::endFrame() {
     }
     // The on-screen keyboard is a system dialog (platform/vita/ime_dialog.hpp). vitaGL draws it only when told a
     // dialog is active at the swap; without this it opens invisibly and takes the touch input.
+    if (g_shotPath.empty()) {
+        static const long shotFrame = [] {
+            const char* v = std::getenv("WOWEE_SHOT_FRAME");
+            return v ? std::atol(v) : 0L;
+        }();
+        static long frameNo = 0;
+        if (shotFrame > 0 && ++frameNo == shotFrame) g_shotPath = "ux0:data/wowee/shot.png";
+    }
+    if (!g_shotPath.empty()) {
+        const bool ok = writeScreenshot(g_shotPath);
+        LOG_WARNING("Screenshot ", g_shotPath, ok ? " written" : " FAILED");
+        g_shotPath.clear();
+    }
     vglSwapBuffers(platform::vita::imeActive() ? GL_TRUE : GL_FALSE);
     // Warning level on purpose: the default log level hides INFO, and this line is the Vita3K smoke test's proof that
     // the main loop runs on vitaGL (it cannot read pixels back).
