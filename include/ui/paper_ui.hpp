@@ -28,6 +28,9 @@
 // the screens after it could be moved off ImGui the same way, but it is not
 // built out beyond what the login screen actually uses.
 
+#ifdef __vita__
+#include "ui/paper_nav.hpp"  // gamepad navigation (VITA-17)
+#endif
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -373,6 +376,9 @@ private:
     ImU32 dragging_ = 0;    ///< sweeping a selection through it
     ImU32 openPopup_ = 0;
     ImU32 justFocused_ = 0; ///< took focus this frame; used by selectAllOnFocus
+#ifdef __vita__
+    PaperNav nav_;          ///< gamepad navigation of the controls above (VITA-17)
+#endif
 
     // Tab order, rebuilt every frame from the order fields are drawn in.
     ImU32 firstField_ = 0;
