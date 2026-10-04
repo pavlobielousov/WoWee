@@ -717,3 +717,13 @@ Debug lesson: **the logger buffers warnings; a launch that "hangs" may be a laun
 **Memory (heap in use, `mallinfo`):** login screen 76 MB; entering the world adds about 130 MB of caches before any tile (DBC name caches, Lua state, addon manager: this is the baseline to attack, VITA-23); each terrain tile then adds about 3-13 MB on the heap plus about 6 MB of GPU buffers and alpha maps (5.9 MB per tile measured: 37,120 vertices x 40 bytes, 16-bit indices, 256 packed alpha maps of 16 KB); with the 3x3 tiles the heap sits at **255-261 MB of 288**, so there is almost no headroom. Frame rate over the terrain: about 55 fps in the log (300 frames per 5.4 s).
 **Seen in the first picture, not fixed yet:** no sky or fog colour (the clear colour is a dark navy), the camera sits at the edge of the loaded tiles so the ground ends in a straight line, grazing-angle texture smearing on the foreground (no anisotropic filtering), no character, doodads, water or buildings, no controls tuned for the Vita yet.
 **Tools:** `ux0:data/wowee/shot.cmd` (any content, uploaded over FTP) takes a screenshot into `shot.png` within half a second, in any state, no restart; `Terrain tile [x,y] uploaded (heap in use N MB)` lines in the log.
+
+
+## 26. World-entry memory (VITA-23)
+
+Measured on the real Vita, 288 MB heap, `WOWEE_LOG_HEAP=1` (adds `{heap N KB}` from `mallinfo` to every log line; Vita only).
+
+- The desktop file cache has a 256 MB floor (`AssetManager::setupFileCacheBudget`), almost the whole Vita heap, and kept every file read as raw bytes. The Vita arm caps it at 8 MB.
+- Peak heap from login to terrain: 262 MB before, 184 MB after (5 terrain tiles, ~51 fps). Spell.dbc still costs ~93 MB while loading (raw file 49 MB plus the parsed copy) and ~50 MB stays resident.
+- Trap: building `wowee_client` does not regenerate `client.bin`; build the `wowee_client.vpk-vpk` target before `deploy.sh`, and check the log line `file cache: N MB` (or a first-line marker) to know which binary ran.
+- Still large: manifest 43 MB / 16 s (VITA-25), ItemDisplayInfo 13-20 MB, Spell.dbc resident.
