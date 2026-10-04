@@ -4,6 +4,7 @@
 #include "rendering/m2_renderer.hpp"
 
 #include "rendering/gl/gl_program.hpp"
+#include "rendering/gl/gl_stats.hpp"
 #include "rendering/gl/gl_texture.hpp"
 #include "rendering/gl/scene_params.hpp"
 #include "rendering/gl/shader_sources.hpp"
@@ -272,6 +273,8 @@ uint32_t M2Renderer::glInstanceCount() const { return gl_ ? static_cast<uint32_t
 
 void M2Renderer::glRender(const gl::SceneParams& scene) {
     if (!glReady() || gl_->instances.empty()) return;
+    static gl::FrameStats stats("M2");
+    stats.begin();
     Frustum frustum;
     frustum.extractFromMatrix(scene.cullViewProj);
     gl_->drawn = gl_->culled = 0;
@@ -297,13 +300,22 @@ void M2Renderer::glRender(const gl::SceneParams& scene) {
 
     glDisable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
+    // GL keeps uniforms per program, so the per-frame ones are set once per program per frame, however often the draws
+    // switch between programs (a tree alternates opaque trunk and alpha-tested leaves); the per-batch ones only when they
+    // change. Measured before: 24 ms of CPU for 360 draws, almost all of it uniform calls.
     int current = -1;
+    bool frameSet[3] = {false, false, false};
+    struct Last { float lit = -1, tint0 = -1, p0 = -1, p3 = -1; const glm::mat4* model = nullptr; } last[3];
+    const glm::mat4 viewProj = scene.projection * scene.view;
     auto useProgram = [&](int k) {
-        if (current == k) return;
-        current = k;
+        if (current != k) {
+            current = k;
+            glUseProgram(gl_->program[k]);
+        }
+        if (frameSet[k]) return;
+        frameSet[k] = true;
         const Gl::Uniforms& u = gl_->u[k];
-        glUseProgram(gl_->program[k]);
-        glUniformMatrix4fv(u.viewProj, 1, GL_FALSE, &(scene.projection * scene.view)[0][0]);
+        glUniformMatrix4fv(u.viewProj, 1, GL_FALSE, &viewProj[0][0]);
         glUniform4f(u.lightDir, scene.lightDir.x, scene.lightDir.y, scene.lightDir.z, 0.0f);
         glUniform3f(u.lightColor, scene.lightColor.x, scene.lightColor.y, scene.lightColor.z);
         glUniform3f(u.ambient, scene.ambient.x, scene.ambient.y, scene.ambient.z);
@@ -312,14 +324,16 @@ void M2Renderer::glRender(const gl::SceneParams& scene) {
         glUniform3f(u.fogColor, scene.fogColor.x, scene.fogColor.y, scene.fogColor.z);
         glUniform2f(u.uvOffset, 0.0f, 0.0f);
         glUniform1i(u.texture, 0);
+        glUniform3f(u.tint, 1.0f, 1.0f, 1.0f);
+        last[k] = Last{};
         glActiveTexture(GL_TEXTURE0);
     };
 
     for (int pass = 0; pass < 2; ++pass) {  // 0: opaque and alpha-tested, 1: blended
         if (pass == 0) { glDepthMask(GL_TRUE); glDisable(GL_BLEND); }
         else { glDepthMask(GL_FALSE); glEnable(GL_BLEND); }
-        current = -1;
         const Gl::Model* bound = nullptr;
+        GLuint boundTexture = 0;
         for (const Item& it : items) {
             for (const Gl::Batch& b : it.model->batches) {
                 const bool blended = b.kind == gl::M2Kind::Blend;
@@ -346,12 +360,26 @@ void M2Renderer::glRender(const gl::SceneParams& scene) {
                         default: glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); break;
                     }
                 }
-                glUniformMatrix4fv(u.model, 1, GL_FALSE, &it.inst->matrix[0][0]);
-                glUniform2f(u.lit, b.unlit ? 0.0f : 1.0f, 1.0f);
-                glUniform3f(u.tint, b.tint.x, b.tint.y, b.tint.z);
+                Last& l = last[k];
+                if (l.model != &it.inst->matrix) {
+                    l.model = &it.inst->matrix;
+                    glUniformMatrix4fv(u.model, 1, GL_FALSE, &it.inst->matrix[0][0]);
+                }
+                const float lit = b.unlit ? 0.0f : 1.0f;
+                if (l.lit != lit) {
+                    l.lit = lit;
+                    glUniform2f(u.lit, lit, 1.0f);
+                }
                 // x alpha cutoff, y colour key, z fade, w fog to colour (additive and multiply fade to black)
-                glUniform4f(u.params, 0.5f, 0.0f, 1.0f, (b.blendMode == 3 || b.blendMode == 4 || b.blendMode == 6) ? 0.0f : 1.0f);
-                glBindTexture(GL_TEXTURE_2D, b.texture);
+                const float fogToColour = (b.blendMode == 3 || b.blendMode == 4 || b.blendMode == 6) ? 0.0f : 1.0f;
+                if (l.p3 != fogToColour) {
+                    l.p3 = fogToColour;
+                    glUniform4f(u.params, 0.5f, 0.0f, 1.0f, fogToColour);
+                }
+                if (boundTexture != b.texture) {
+                    boundTexture = b.texture;
+                    glBindTexture(GL_TEXTURE_2D, b.texture);
+                }
                 glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(b.indexCount), GL_UNSIGNED_SHORT,
                                reinterpret_cast<const void*>(static_cast<uintptr_t>(b.firstIndexBytes)));
                 ++gl_->drawn;
@@ -360,6 +388,11 @@ void M2Renderer::glRender(const gl::SceneParams& scene) {
     }
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    stats.end(gl_->drawn, static_cast<long>(items.size()));
+    if (stats.frames == 0) {
+        LOG_WARNING("GL memory M2: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), ", buffers ", gl_->gpuBytes / 1024,
+                    " KB, models ", gl_->models.size(), ", instances ", gl_->instances.size());
+    }
 }
 
 

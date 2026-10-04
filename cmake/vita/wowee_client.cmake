@@ -172,7 +172,7 @@ set_source_files_properties(${WOWEE_ROOT_DIR}/src/rendering/gl/shader_cache.cpp 
 # the end of the code and constants: a coin flip on the code size (GlProbe hit it; VITA-17's few hundred lines did; a
 # larger page alignment turns it into "overlapping sections" instead). The padding moves the end of the segment. When the
 # error comes back after code growth, raise WOWEE_VITA_TEXT_PAD_KB by 16 (or 32), or lower it, until the link passes.
-set(WOWEE_VITA_TEXT_PAD_KB 40 CACHE STRING "padding in the read-only segment of wowee_client, in KB (see CMake comment)")
+set(WOWEE_VITA_TEXT_PAD_KB 56 CACHE STRING "padding in the read-only segment of wowee_client, in KB (see CMake comment)")
 target_sources(wowee_client PRIVATE ${WOWEE_VITA_SRC_DIR}/vita_text_pad.cpp)
 target_compile_definitions(wowee_client PRIVATE WOWEE_VITA_TEXT_PAD_KB=${WOWEE_VITA_TEXT_PAD_KB})
 target_link_options(wowee_client PRIVATE -Wl,-u,wowee_vita_text_pad)

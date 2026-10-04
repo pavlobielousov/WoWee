@@ -9,6 +9,7 @@
 #include "rendering/imgui_backend.hpp"
 #include "rendering/animation_controller.hpp"
 #include "rendering/gl/scene_params.hpp"
+#include "rendering/gl/scene_target.hpp"
 #include "rendering/gl/shader_selftest.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
@@ -68,12 +69,46 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <cstdio>
 #include <string>
 #include <vector>
 
 namespace wowee::rendering {
 
+namespace {
+// Live profiling switches (VITA-19): ux0:data/wowee/gl.cfg is read every 60 frames, words in it: noterrain nowmo nom2 and
+// scale=<0.2..1> (the 3D viewport as a fraction of the screen, to tell fill rate from draw-call cost). Delete the file to
+// reset. A diagnostic only; the file is not there in normal use.
+struct DebugFlags {
+    bool noTerrain = false, noWmo = false, noM2 = false;
+    float scale = 1.0f;
+};
+DebugFlags g_debug;
+
+void pollDebugFlags() {
+    static unsigned tick = 0;
+    if (++tick % 60 != 0) return;
+    DebugFlags f;
+    if (FILE* fp = fopen("ux0:data/wowee/gl.cfg", "r")) {
+        char buf[256] = {0};
+        const size_t n = fread(buf, 1, sizeof buf - 1, fp);
+        buf[n] = 0;
+        fclose(fp);
+        f.noTerrain = strstr(buf, "noterrain") != nullptr;
+        f.noWmo = strstr(buf, "nowmo") != nullptr;
+        f.noM2 = strstr(buf, "nom2") != nullptr;
+        if (const char* sc = strstr(buf, "scale=")) f.scale = std::clamp(static_cast<float>(atof(sc + 6)), 0.2f, 1.0f);
+    }
+    if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.scale != g_debug.scale) {
+        LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " scale=", f.scale);
+    }
+    g_debug = f;
+}
+}  // namespace
+
 void Renderer::beginFrame() {
+    pollDebugFlags();
     // In the world the background is the fog colour, so distant terrain fades into the sky rather than into a dark box.
     if (terrainRenderer) {
         const gl::SceneParams sky;
@@ -151,6 +186,10 @@ void Renderer::endFrame() {
         const struct mallinfo heap = mallinfo();  // newlib: the whole heap is one arena of WOWEE_VITA_HEAP_MB
         LOG_WARNING("Vita frames presented: ", frames, ", heap in use ", static_cast<unsigned>(heap.uordblks) / (1024 * 1024),
                     " MB of ", static_cast<unsigned>(heap.arena) / (1024 * 1024), " MB arena");
+        LOG_WARNING("vitaGL memory (free/total MB): vram ", vglMemFree(VGL_MEM_VRAM) / (1024 * 1024), "/", vglMemTotal(VGL_MEM_VRAM) / (1024 * 1024),
+                    " ram ", vglMemFree(VGL_MEM_RAM) / (1024 * 1024), "/", vglMemTotal(VGL_MEM_RAM) / (1024 * 1024),
+                    " phycont ", vglMemFree(VGL_MEM_PHYCONT) / (1024 * 1024), "/", vglMemTotal(VGL_MEM_PHYCONT) / (1024 * 1024),
+                    " budget ", vglMemFree(VGL_MEM_BUDGET) / (1024 * 1024), "/", vglMemTotal(VGL_MEM_BUDGET) / (1024 * 1024));
         if (camera && terrainManager) {
             const glm::vec3 e = camera->getPosition();
             const auto h = terrainManager->getHeightAt(e.x, e.y);
@@ -187,6 +226,8 @@ bool Renderer::initialize(core::Window* win) {
     cameraController = std::make_unique<CameraController>(camera.get());
     cameraController->setUseWoWSpeed(true);
     cameraController->setMouseSensitivity(0.15f);
+    // WoWee pans the camera round the area after a few idle seconds; on the Vita that only moves the picture under a test.
+    cameraController->setIdleOrbitEnabled(false);
     LOG_INFO("Renderer (Vita, GL): camera and controller ready");
     gl::runShaderSelfTest();  // WOWEE_GL_SELFTEST=1 in env.txt (VITA-14)
     return true;
@@ -211,6 +252,13 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             m2Renderer.reset();
         }
     }
+    if (!wmoRenderer) {
+        wmoRenderer = std::make_unique<WMORenderer>();
+        if (!wmoRenderer->glInitialize(assetManager)) {
+            LOG_ERROR("WMO renderer (GL) did not start, drawing no buildings");
+            wmoRenderer.reset();
+        }
+    }
     if (!terrainManager) {
         terrainManager = std::make_unique<TerrainManager>();
         if (!terrainManager->initialize(assetManager, terrainRenderer.get())) {
@@ -220,6 +268,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         }
         if (cameraController) cameraController->setTerrainManager(terrainManager.get());
         if (m2Renderer) terrainManager->setM2Renderer(m2Renderer.get());
+        if (wmoRenderer) terrainManager->setWMORenderer(wmoRenderer.get());
     }
     setActiveMapName(mapName);
     return true;
@@ -278,11 +327,36 @@ void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]]
     scene.projection = glm::perspectiveRH_NO(glm::radians(camera->getFovDegrees()), camera->getAspectRatio(), 0.25f, 4000.0f);
     scene.cullViewProj = camera->getViewProjectionMatrix();
     scene.eye = camera->getPosition();
-    scene.viewDistance = viewDistance_;
-    scene.fogStart = viewDistance_ * 0.45f;
-    scene.fogEnd = viewDistance_ * 0.95f;
-    terrainRenderer->glRender(scene);
-    if (m2Renderer && m2Renderer->glReady()) m2Renderer->glRender(scene);
+    // The Vita draws a small world: 500 yards by default (WOWEE_VIEW_DISTANCE in env.txt). At the desktop's 1200 almost every
+    // chunk of the nine loaded tiles was drawn (about 900 draws) and the draw submission alone took 18 ms of the frame.
+    static const float kVitaViewDistance = [] {
+        const char* v = std::getenv("WOWEE_VIEW_DISTANCE");
+        const float d = v ? static_cast<float>(std::atof(v)) : 500.0f;
+        return std::clamp(d, 200.0f, 2400.0f);
+    }();
+    const float viewDistance = std::min(viewDistance_, kVitaViewDistance);
+    scene.viewDistance = viewDistance;
+    scene.fogStart = viewDistance * 0.45f;
+    scene.fogEnd = viewDistance * 0.95f;
+    // The 3D scene is drawn at a fraction of the screen size and scaled up (WOWEE_RENDER_SCALE in env.txt, default 0.75;
+    // 1 = full size). Created on first use: the screen is 960x544 on every Vita.
+    static gl::SceneTarget target;
+    static bool targetTried = false;
+    if (!targetTried) {
+        targetTried = true;
+        float scale = 0.75f;
+        if (const char* v = std::getenv("WOWEE_RENDER_SCALE")) scale = static_cast<float>(std::atof(v));
+        target.initialize(960, 544, scale);
+    }
+    if (target.active()) {
+        target.begin();
+        glClearColor(scene.fogColor.x, scene.fogColor.y, scene.fogColor.z, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    }
+    if (!g_debug.noTerrain) terrainRenderer->glRender(scene);
+    if (!g_debug.noWmo && wmoRenderer && wmoRenderer->glReady()) wmoRenderer->glRender(scene);
+    if (!g_debug.noM2 && m2Renderer && m2Renderer->glReady()) m2Renderer->glRender(scene);
+    if (target.active()) target.end();
 }
 
 void Renderer::resetCombatVisualState() { }
@@ -338,6 +412,8 @@ core::ScreenRecorder::Stats Renderer::stopRecording() { return {}; }
 void Renderer::unregisterPreview([[maybe_unused]] CharacterPreview* preview) { }
 
 void Renderer::update(float deltaTime) {
+    // The game screen re-applies the saved setting (default on) every time it is shown: keep the idle orbit off here.
+    if (cameraController) cameraController->setIdleOrbitEnabled(false);
     if (cameraController) cameraController->update(deltaTime);
     if (terrainManager && camera) terrainManager->update(*camera, deltaTime);
 }

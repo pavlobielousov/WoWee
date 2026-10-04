@@ -238,6 +238,20 @@ bool Window::initialize() {
     LOG_WARNING("Shader compiler optimisation level ", sharkLevel);
     rendering::gl::setShaderCompilerDefaultLevel(sharkLevel);
     rendering::gl::applyShaderCompilerLevel(sharkLevel);
+    // sceGxm buffers (VITA-19 profiling): the defaults are small for ~2000 draws a frame. Each is read from env.txt in the
+    // unit named; unset leaves vitaGL's default. They must be set before vglInit*.
+    auto envNumber = [](const char* name) -> long {
+        const char* v = std::getenv(name);
+        return v ? std::atol(v) : 0;
+    };
+    if (const long mb = envNumber("WOWEE_GXM_PARAM_MB")) vglSetParamBufferSize(static_cast<uint32_t>(mb) * 1024 * 1024);
+    if (const long kb = envNumber("WOWEE_GXM_VDM_KB")) vglSetVDMBufferSize(static_cast<uint32_t>(kb) * 1024);
+    if (const long mb = envNumber("WOWEE_GXM_VERTEX_MB")) vglSetVertexBufferSize(static_cast<uint32_t>(mb) * 1024 * 1024);
+    if (const long kb = envNumber("WOWEE_GXM_FRAGMENT_KB")) vglSetFragmentBufferSize(static_cast<uint32_t>(kb) * 1024);
+    if (const long kb = envNumber("WOWEE_GXM_USSE_KB")) vglSetUSSEBufferSize(static_cast<uint32_t>(kb) * 1024);
+    LOG_WARNING("GXM buffers (MB/KB, 0 = default): param ", envNumber("WOWEE_GXM_PARAM_MB"), " vdm ", envNumber("WOWEE_GXM_VDM_KB"),
+                " vertex ", envNumber("WOWEE_GXM_VERTEX_MB"), " fragment ", envNumber("WOWEE_GXM_FRAGMENT_KB"), " usse ",
+                envNumber("WOWEE_GXM_USSE_KB"));
     const GLboolean resolutionFell = vglInitExtended(0, kScreenW, kScreenH, kRamThresholdBytes, SCE_GXM_MULTISAMPLE_NONE);
     if (vglMemTotal(VGL_MEM_VRAM) == 0 || glGetString(GL_VERSION) == nullptr) {
         LOG_ERROR("vitaGL did not initialise (no memory pools, no GL_VERSION)");

@@ -2,7 +2,7 @@
 // ELF tooling needs room after the end of the text segment for its import data, and the room left is whatever the code size
 // happens to leave before the next 64 KB boundary.
 #ifndef WOWEE_VITA_TEXT_PAD_KB
-#define WOWEE_VITA_TEXT_PAD_KB 40
+#define WOWEE_VITA_TEXT_PAD_KB 56
 #endif
 
 extern "C" {

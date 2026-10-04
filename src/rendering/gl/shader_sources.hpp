@@ -24,4 +24,10 @@ const ProgramDef& terrainProgram(int layers);
 enum class M2Kind { Opaque, AlphaTest, Blend };
 const ProgramDef& m2Program(M2Kind kind);
 
+// Building groups: the same three classes with a vertex colour attribute and the WMO light modes.
+const ProgramDef& wmoProgram(M2Kind kind);
+
+// Copies the off-screen scene to the screen, scaled.
+const ProgramDef& blitProgram();
+
 }  // namespace wowee::rendering::gl

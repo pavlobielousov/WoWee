@@ -222,6 +222,10 @@ const std::vector<ProgramDef>& shaderManifest() {
         list.push_back(m2Program(M2Kind::Opaque));
         list.push_back(m2Program(M2Kind::AlphaTest));
         list.push_back(m2Program(M2Kind::Blend));
+        list.push_back(wmoProgram(M2Kind::Opaque));
+        list.push_back(wmoProgram(M2Kind::AlphaTest));
+        list.push_back(wmoProgram(M2Kind::Blend));
+        list.push_back(blitProgram());
         return list;
     }();
     static const std::vector<ProgramDef> withStandIns = [] {
