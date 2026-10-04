@@ -119,9 +119,19 @@ add_library(lua51_vita STATIC ${_lua})
 target_compile_options(lua51_vita PRIVATE -w -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0)
 target_include_directories(lua51_vita SYSTEM PUBLIC ${WOWEE_ROOT_DIR}/extern/lua-5.1.5/src)
 
-# vitaGL and what it needs (the link line GlProbe proved on the device).
+# vitaGL and what it needs (the link line GlProbe proved on the device). -DVITAGL_CUSTOM=<dir> links a vitaGL built
+# by tools/vita/build_vitagl.sh (dir holds libvitaGL.a and include/vitaGL.h): the SDK's copy shows a boot splash that
+# holds the first frame for about a second (VITA-53).
+set(WOWEE_VITAGL_LIB vitaGL)
+set(WOWEE_VITAGL_FILE "$ENV{VITASDK}/arm-vita-eabi/lib/libvitaGL.a")
+if(VITAGL_CUSTOM)
+    get_filename_component(_vgl_dir "${VITAGL_CUSTOM}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    set(WOWEE_VITAGL_LIB ${_vgl_dir}/libvitaGL.a)
+    set(WOWEE_VITAGL_FILE ${_vgl_dir}/libvitaGL.a)
+    target_include_directories(wowee_client_objects BEFORE PRIVATE ${_vgl_dir}/include)
+endif()
 set(WOWEE_VITA_GL_LIBS
-    vitaGL vitashark SceShaccCg_stub SceShaccCgExt taihen_stub mathneon
+    ${WOWEE_VITAGL_LIB} vitashark SceShaccCg_stub SceShaccCgExt taihen_stub mathneon
     SceGxm_stub SceDisplay_stub SceCommonDialog_stub SceAppMgr_stub SceAppUtil_stub SceKernelDmacMgr_stub
     SceCtrl_stub SceIme_stub ScePower_stub SceSysmodule_stub SceLibKernel_stub SceIofilemgr_stub m)
 
@@ -134,6 +144,17 @@ target_compile_definitions(wowee_client PRIVATE WOWEE_VITA_CLIENT=1)
 target_link_libraries(wowee_client PRIVATE wowee_vita_shadow wowee_core imgui_vita lua51_vita
     ${WOWEE_CORE_LIBS} ${WOWEE_VITA_GL_LIBS} SDL3::SDL3)
 wowee_vita_executable(wowee_client)
+
+# The shader cache (VITA-53, src/rendering/gl/shader_cache.cpp) sits in front of vitaGL's shader calls. The build tag is
+# a hash of the vitaGL library the client links, so a different library (its binaries are not interchangeable,
+# DEV_SETUP section 19) never reads another's cache entries.
+file(SHA256 "${WOWEE_VITAGL_FILE}" _vgl_hash)
+string(SUBSTRING "${_vgl_hash}" 0 16 WOWEE_VITA_GL_TAG)
+set_source_files_properties(${WOWEE_ROOT_DIR}/src/rendering/gl/shader_cache.cpp PROPERTIES
+    COMPILE_DEFINITIONS "WOWEE_VITA_GL_TAG=\"${WOWEE_VITA_GL_TAG}\"")
+target_link_options(wowee_client PRIVATE
+    -Wl,--wrap=glCreateShader -Wl,--wrap=glShaderSource -Wl,--wrap=glCompileShader
+    -Wl,--wrap=glAttachShader -Wl,--wrap=glLinkProgram -Wl,--wrap=glDeleteShader)
 
 # The VPK (own title ID, so it installs beside wowee.vpk and wowee_headless.vpk). vita_create_vpk is a macro that
 # leaks its file list into the next call (see Vita.cmake): reset first.
