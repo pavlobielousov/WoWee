@@ -119,7 +119,14 @@ void AssetManager::setupFileCacheBudget() {
     const size_t envFixedMB = parseEnvSizeMB("WOWEE_FILE_CACHE_MB");
     const size_t envMaxMB = parseEnvSizeMB("WOWEE_FILE_CACHE_MAX_MB");
 
+#ifdef __vita__
+    // The whole heap is 288 MB. The desktop floor of 256 MB let this cache keep every DBC's raw
+    // bytes (Spell.dbc alone is tens of MB) next to the parsed copy, which was most of the
+    // world-entry memory (VITA-23).
+    const size_t minBudgetBytes = 8ull * 1024ull * 1024ull;
+#else
     const size_t minBudgetBytes = 256ull * 1024ull * 1024ull;
+#endif
 #ifdef __ANDROID__
     // Half of available RAM is a desktop rule. Android does not let one app
     // have that: it enforces a per-app limit far below the machine's memory and
@@ -127,6 +134,8 @@ void AssetManager::setupFileCacheBudget() {
     // 8 GB was handing this cache 840 MB, which is both more than the app may
     // hold and a good way to be killed the moment it goes to the background.
     const size_t defaultMaxBudgetBytes = 384ull * 1024ull * 1024ull;
+#elif defined(__vita__)
+    const size_t defaultMaxBudgetBytes = 8ull * 1024ull * 1024ull;
 #else
     const size_t defaultMaxBudgetBytes = core::clampToSizeT(12288ull * 1024ull * 1024ull);  // 12 GB max for file cache
 #endif

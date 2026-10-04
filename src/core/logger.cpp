@@ -20,6 +20,7 @@
 #endif
 #ifdef __vita__
 #include "platform/vita/vita_platform.hpp"
+#include <malloc.h>
 #endif
 
 namespace wowee {
@@ -193,6 +194,11 @@ void Logger::emitLineLocked(LogLevel level, const std::string& rawMessage) {
     }
 
     line << "] " << message;
+#ifdef __vita__
+    // WOWEE_LOG_HEAP=1 in env.txt: the heap in use after every line, to see which step of a load takes the memory (VITA-23).
+    static const bool heapTag = std::getenv("WOWEE_LOG_HEAP") != nullptr;
+    if (heapTag) line << "  {heap " << static_cast<unsigned>(mallinfo().uordblks) / 1024 << " KB}";
+#endif
 
     if (echoToStdout_) {
         std::cout << line.str() << '\n';
