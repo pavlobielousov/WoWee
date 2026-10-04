@@ -74,10 +74,15 @@ target_include_directories(wowee_vita_shadow BEFORE INTERFACE ${WOWEE_ROOT_DIR}/
 # Everything a Vita executable of ours needs at link time, in one place so no target can miss one
 # (VITA-47). Call it for every executable that links wowee_core or the platform layer.
 function(wowee_vita_executable target)
+    # An optional second argument is this executable's heap in MB (the client's is larger: it needs the extended memory mode).
+    set(heap_mb ${WOWEE_VITA_HEAP_MB})
+    if(ARGC GREATER 1)
+        set(heap_mb ${ARGV1})
+    endif()
     add_dependencies(${target} wowee_version)
     target_include_directories(${target} PRIVATE ${WOWEE_ROOT_DIR}/include ${CMAKE_BINARY_DIR}/generated)
     target_compile_definitions(${target} PRIVATE
-        WOWEE_VITA_HEAP_MB=${WOWEE_VITA_HEAP_MB} WOWEE_VITA_STACK_MB=${WOWEE_VITA_STACK_MB})
+        WOWEE_VITA_HEAP_MB=${heap_mb} WOWEE_VITA_STACK_MB=${WOWEE_VITA_STACK_MB})
     target_link_libraries(${target} PRIVATE pthread
         SceIofilemgr_stub SceLibKernel_stub SceSysmodule_stub SceNet_stub SceNetCtl_stub ScePower_stub)
 
