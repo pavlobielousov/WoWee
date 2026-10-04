@@ -58,6 +58,7 @@ add_custom_target(wowee_version ALL
 # The platform layer every Vita executable that uses the logger or threads links (VITA-6, VITA-8,
 # VITA-42): the startup path, the log sink, the thread budget and the thread-safe-statics guards.
 set(WOWEE_VITA_PLATFORM_SOURCES
+    ${WOWEE_VITA_SRC_DIR}/vita_stat_fix.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_main.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_cxa_guard.cpp
     ${WOWEE_VITA_SRC_DIR}/vita_env.cpp
@@ -94,6 +95,10 @@ function(wowee_vita_executable target)
     # pthread-embedded gives a std::thread a 32 KB stack; vita_threads.cpp wraps pthread_create to
     # raise it (VITA-8). Every Vita executable that starts threads needs both.
     target_link_options(${target} PRIVATE -Wl,--wrap=pthread_create)
+
+    # stat() of a path in a missing directory fails with EINVAL on the Vita; std::filesystem::exists then throws instead of
+    # answering false (VITA-18, src/platform/vita/vita_stat_fix.cpp).
+    target_link_options(${target} PRIVATE -Wl,--wrap=stat)
 
     # sceUserMainThreadStackSize (vita_main.cpp) is read by the loader from the ELF, but nothing in
     # the program references it, so --gc-sections removed it and the main thread kept its 256 KB

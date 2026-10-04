@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <filesystem>
+#include <system_error>
 #include <stdexcept>
 #include <typeinfo>
 
@@ -42,7 +44,8 @@ _Unwind_Reason_Code collect(struct _Unwind_Context* ctx, void* data) {
 bool interesting(const std::type_info* t) {
     // Not invalid_argument or out_of_range: the Lua unit API throws those from std::stoul as control flow, hundreds a second.
     return *t == typeid(std::length_error) || *t == typeid(std::bad_alloc) || *t == typeid(std::domain_error) ||
-           *t == typeid(std::bad_array_new_length);
+           *t == typeid(std::bad_array_new_length) || *t == typeid(std::filesystem::filesystem_error) ||
+           *t == typeid(std::system_error);
 }
 
 }  // namespace
@@ -55,8 +58,15 @@ void __wrap___cxa_throw(void* object, std::type_info* type, void (*destructor)(v
         inside = true;
         Frames frames;
         _Unwind_Backtrace(&collect, &frames);
-        char line[600];
-        int n = std::snprintf(line, sizeof line, "THROW %s base=0x%lx frames:", type->name(),
+        char line[700];
+        // What the exception says, for the kinds that carry a message worth reading (the path of a filesystem error).
+        const char* what = "";
+        if (*type == typeid(std::filesystem::filesystem_error)) {
+            what = static_cast<const std::exception*>(static_cast<const std::filesystem::filesystem_error*>(object))->what();
+        } else if (*type == typeid(std::system_error)) {
+            what = static_cast<const std::exception*>(static_cast<const std::system_error*>(object))->what();
+        }
+        int n = std::snprintf(line, sizeof line, "THROW %s \"%.150s\" base=0x%lx frames:", type->name(), what,
                               reinterpret_cast<unsigned long>(&__executable_start));
         for (int i = 0; i < frames.count && n < static_cast<int>(sizeof line) - 14; ++i) {
             n += std::snprintf(line + n, sizeof line - static_cast<size_t>(n), " +0x%lx",

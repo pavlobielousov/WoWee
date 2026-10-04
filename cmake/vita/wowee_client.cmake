@@ -67,6 +67,7 @@ set(WOWEE_CLIENT_RENDERING_SOURCES
     renderer_spell_visuals.cpp
     renderer_transport_targets.cpp
     spell_visual_system.cpp
+    terrain_manager.cpp
     wmo_renderer_collision.cpp
     zone_ambience.cpp
     world_map/coordinate_projection.cpp

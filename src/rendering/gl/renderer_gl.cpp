@@ -8,6 +8,7 @@
 #include "core/window.hpp"
 #include "rendering/imgui_backend.hpp"
 #include "rendering/animation_controller.hpp"
+#include "rendering/gl/scene_params.hpp"
 #include "rendering/gl/shader_selftest.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
@@ -30,6 +31,11 @@
 #include "game/zone_manager.hpp"
 
 #include <malloc.h>
+
+#include <psp2/io/fcntl.h>
+#include <psp2/io/stat.h>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "rendering/volumetric_fog.hpp"
 #include "rendering/sun_shafts.hpp"
@@ -108,6 +114,17 @@ void Renderer::endFrame() {
     }
     // The on-screen keyboard is a system dialog (platform/vita/ime_dialog.hpp). vitaGL draws it only when told a
     // dialog is active at the swap; without this it opens invisibly and takes the touch input.
+    // On demand: a file ux0:data/wowee/shot.cmd (uploaded over FTP) takes a screenshot within half a second and is removed.
+    {
+        static unsigned tick = 0;
+        if (g_shotPath.empty() && ++tick % 30 == 0) {
+            SceIoStat info;
+            if (sceIoGetstat("ux0:data/wowee/shot.cmd", &info) >= 0) {
+                sceIoRemove("ux0:data/wowee/shot.cmd");
+                g_shotPath = "ux0:data/wowee/shot.png";
+            }
+        }
+    }
     if (g_shotPath.empty()) {
         static const long shotFrame = [] {
             const char* v = std::getenv("WOWEE_SHOT_FRAME");
@@ -141,7 +158,7 @@ int Renderer::getMaxMsaaSamples() const { return 0; }
 
 PostProcessPipeline* Renderer::getPostProcessPipeline() const { return nullptr; }
 
-int Renderer::getTerrainLoadRadius() const { return 0; }
+int Renderer::getTerrainLoadRadius() const { return TerrainManager::kVitaMaxLoadRadius; }
 
 const std::vector<std::pair<const char*, double>>& Renderer::gpuTimings() const {
     static const std::vector<std::pair<const char*, double>> none;
@@ -149,15 +166,45 @@ const std::vector<std::pair<const char*, double>>& Renderer::gpuTimings() const 
 }
 
 bool Renderer::initialize(core::Window* win) {
-    // The window already brought vitaGL up (src/platform/vita/vita_window.cpp). The scene renderers arrive with
-    // VITA-18 and on; until then a frame is a clear colour and the interface.
+    // The window already brought vitaGL up (src/platform/vita/vita_window.cpp).
     window = win;
-    LOG_INFO("Renderer (Vita skeleton): initialised, interface only");
+    camera = std::make_unique<Camera>();
+    camera->setPosition(glm::vec3(-8900.0f, -170.0f, 150.0f));
+    camera->setRotation(0.0f, -5.0f);
+    camera->setAspectRatio(window->getAspectRatio());
+    camera->setFov(60.0f);
+    cameraController = std::make_unique<CameraController>(camera.get());
+    cameraController->setUseWoWSpeed(true);
+    cameraController->setMouseSensitivity(0.15f);
+    LOG_INFO("Renderer (Vita, GL): camera and controller ready");
     gl::runShaderSelfTest();  // WOWEE_GL_SELFTEST=1 in env.txt (VITA-14)
     return true;
 }
 
-bool Renderer::initializeRenderers([[maybe_unused]] pipeline::AssetManager* assetManager, [[maybe_unused]] const std::string& mapName) { return true; }
+// The terrain half of the real initializeRenderers: the GL terrain renderer and upstream's TerrainManager over it. Everything
+// else (water, M2, WMO, sky, characters) arrives with VITA-19/20/21.
+bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const std::string& mapName) {
+    if (!assetManager) return false;
+    cachedAssetManager = assetManager;
+    if (!terrainRenderer) {
+        terrainRenderer = std::make_unique<TerrainRenderer>();
+        if (!terrainRenderer->glInitialize(assetManager)) {
+            terrainRenderer.reset();
+            return false;
+        }
+    }
+    if (!terrainManager) {
+        terrainManager = std::make_unique<TerrainManager>();
+        if (!terrainManager->initialize(assetManager, terrainRenderer.get())) {
+            LOG_ERROR("Failed to initialize terrain manager");
+            terrainManager.reset();
+            return false;
+        }
+        if (cameraController) cameraController->setTerrainManager(terrainManager.get());
+    }
+    setActiveMapName(mapName);
+    return true;
+}
 
 bool Renderer::isDeviceLost() const { return false; }
 
@@ -165,7 +212,26 @@ bool Renderer::isOnOutdoorPvpObjective() const { return false; }
 
 bool Renderer::isRecording() const { return false; }
 
-bool Renderer::loadTestTerrain([[maybe_unused]] pipeline::AssetManager* assetManager, [[maybe_unused]] const std::string& adtPath) { return false; }
+bool Renderer::loadTestTerrain(pipeline::AssetManager* assetManager, const std::string& adtPath) {
+    // "World\\Maps\\<map>\\<map>_<x>_<y>.adt"
+    std::string mapName;
+    int tileX = 32, tileY = 49;
+    const std::size_t sep = adtPath.find_last_of("\\/");
+    const std::string file = sep == std::string::npos ? adtPath : adtPath.substr(sep + 1);
+    const std::size_t u1 = file.find('_');
+    const std::size_t u2 = u1 == std::string::npos ? std::string::npos : file.find('_', u1 + 1);
+    const std::size_t dot = u2 == std::string::npos ? std::string::npos : file.find('.', u2);
+    if (u1 != std::string::npos && u2 != std::string::npos && dot != std::string::npos) {
+        mapName = file.substr(0, u1);
+        tileX = std::atoi(file.substr(u1 + 1, u2 - u1 - 1).c_str());
+        tileY = std::atoi(file.substr(u2 + 1, dot - u2 - 1).c_str());
+    }
+    if (!initializeRenderers(assetManager, mapName)) return false;
+    LOG_WARNING("Terrain: enqueuing the first tile [", tileX, ",", tileY, "] of '", mapName, "'");
+    if (!terrainManager->enqueueTile(tileX, tileY)) return false;
+    terrainLoaded = true;
+    return true;
+}
 
 void Renderer::registerPreview([[maybe_unused]] CharacterPreview* preview) { }
 
@@ -185,13 +251,30 @@ std::string Renderer::takeRecordingFailure() { return {}; }
 
 void Renderer::renderHUD() { }
 
-void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]] game::GameHandler* gameHandler) { }
+void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]] game::GameHandler* gameHandler) {
+    if (!camera || !terrainRenderer) return;
+    gl::SceneParams scene;
+    scene.view = camera->getViewMatrix();
+    // OpenGL clip space: the camera's own projection is Vulkan's (depth 0..1, Y flipped), so build the GL one (DEV_SETUP 22).
+    scene.projection = glm::perspectiveRH_NO(glm::radians(camera->getFovDegrees()), camera->getAspectRatio(), 2.0f, 4000.0f);
+    scene.cullViewProj = camera->getViewProjectionMatrix();
+    scene.eye = camera->getPosition();
+    scene.viewDistance = viewDistance_;
+    scene.fogStart = viewDistance_ * 0.45f;
+    scene.fogEnd = viewDistance_ * 0.95f;
+    terrainRenderer->glRender(scene);
+}
 
 void Renderer::resetCombatVisualState() { }
 
-void Renderer::setActiveMapName([[maybe_unused]] const std::string& name) { }
+void Renderer::setActiveMapName(const std::string& name) {
+    if (terrainManager && !name.empty()) terrainManager->setMapName(name);
+}
 
-void Renderer::setCharacterFollow([[maybe_unused]] uint32_t instanceId) { }
+void Renderer::setCharacterFollow(uint32_t instanceId) {
+    characterInstanceId = instanceId;
+    if (cameraController && instanceId > 0) cameraController->setFollowTarget(&characterPosition);
+}
 
 void Renderer::setFSR2Enabled([[maybe_unused]] bool enabled) { }
 
@@ -211,13 +294,22 @@ void Renderer::setSelectionCircle([[maybe_unused]] const glm::vec3& pos, [[maybe
 
 void Renderer::setSharpStars([[maybe_unused]] bool enabled) { }
 
-void Renderer::setViewDistance([[maybe_unused]] float distance) { }
+void Renderer::setViewDistance(float distance) { viewDistance_ = std::clamp(distance, 200.0f, 2400.0f); }
 
 void Renderer::setVolumetricFogQuality([[maybe_unused]] int quality) { }
 
 void Renderer::setWaterRefractionEnabled([[maybe_unused]] bool enabled) { }
 
-void Renderer::shutdown() { }
+void Renderer::shutdown() {
+    if (terrainManager) {
+        terrainManager->stopWorkers();
+        terrainManager.reset();
+    }
+    if (terrainRenderer) {
+        terrainRenderer->shutdown();
+        terrainRenderer.reset();
+    }
+}
 
 bool Renderer::startRecording([[maybe_unused]] const std::string& path, [[maybe_unused]] std::string& error) { return false; }
 
@@ -225,7 +317,10 @@ core::ScreenRecorder::Stats Renderer::stopRecording() { return {}; }
 
 void Renderer::unregisterPreview([[maybe_unused]] CharacterPreview* preview) { }
 
-void Renderer::update([[maybe_unused]] float deltaTime) { }
+void Renderer::update(float deltaTime) {
+    if (cameraController) cameraController->update(deltaTime);
+    if (terrainManager && camera) terrainManager->update(*camera, deltaTime);
+}
 
 void Renderer::waitIdle([[maybe_unused]] const char* where) { }
 

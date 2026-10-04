@@ -75,4 +75,8 @@ void CharacterRenderer::startFadeIn([[maybe_unused]] uint32_t instanceId, [[mayb
 
 void CharacterRenderer::unloadModelIfUnused([[maybe_unused]] uint32_t modelId) { }
 
+bool CharacterRenderer::getInstanceHeight([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] float& outHeight) const { return false; }
+
+bool CharacterRenderer::getInstanceKeyBonePivotZ([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] int32_t keyBoneId, [[maybe_unused]] float& outZ) const { return false; }
+
 }  // namespace wowee::rendering
