@@ -93,7 +93,8 @@ list(APPEND WOWEE_CLIENT_SOURCES ${WOWEE_CLIENT_RENDERING_SOURCES} ${_gl}
     ${WOWEE_VITA_SRC_DIR}/vita_window.cpp
     ${WOWEE_VITA_SRC_DIR}/map_window_stub.cpp
     ${WOWEE_VITA_SRC_DIR}/open_url_vita.cpp
-    ${WOWEE_VITA_SRC_DIR}/process_shim.cpp)
+    ${WOWEE_VITA_SRC_DIR}/process_shim.cpp
+    ${WOWEE_VITA_SRC_DIR}/vita_ime.cpp)
 
 # The shadow headers come FIRST on the include path (they hide upstream's renderer headers), so this is a
 # separate OBJECT library that links wowee_vita_shadow before anything else.
@@ -122,7 +123,7 @@ target_include_directories(lua51_vita SYSTEM PUBLIC ${WOWEE_ROOT_DIR}/extern/lua
 set(WOWEE_VITA_GL_LIBS
     vitaGL vitashark SceShaccCg_stub SceShaccCgExt taihen_stub mathneon
     SceGxm_stub SceDisplay_stub SceCommonDialog_stub SceAppMgr_stub SceAppUtil_stub SceKernelDmacMgr_stub
-    SceCtrl_stub ScePower_stub SceSysmodule_stub SceLibKernel_stub SceIofilemgr_stub m)
+    SceCtrl_stub SceIme_stub ScePower_stub SceSysmodule_stub SceLibKernel_stub SceIofilemgr_stub m)
 
 # WOWEE_VITA_CLIENT turns main.cpp's Application arm on (src/main.cpp).
 add_executable(wowee_client

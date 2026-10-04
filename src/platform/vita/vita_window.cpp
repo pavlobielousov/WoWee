@@ -13,11 +13,13 @@
 #include "core/window.hpp"
 
 #include "core/logger.hpp"
+#include "platform/vita/ime_dialog.hpp"
 #include "rendering/imgui_backend.hpp"
 #include "rendering/ui_texture.hpp"
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
 #include <vitaGL.h>
@@ -90,6 +92,7 @@ public:
 
     void newFrame() override {
         if (!live_) return;
+        driveKeyboard();
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
     }
@@ -105,8 +108,53 @@ public:
     void contextGone() { ctx_ = nullptr; }
 
 private:
+    // The system keyboard (VITA-55). SDL's own Vita keyboard is switched off (Window::initialize) because its dialog
+    // always opens empty. Instead, when a text field is tapped, the dialog opens with the field's current text; on
+    // Enter the field is emptied (Ctrl+A, Delete) and the new text typed into it, so ImGui's own editing, undo and
+    // callbacks see an ordinary edit. Cancel changes nothing.
+    void driveKeyboard() {
+        ImGuiContext* g = ImGui::GetCurrentContext();
+        if (!g) return;
+        ImGuiIO& io = ImGui::GetIO();
+
+        bool confirmed = false;
+        std::string text;
+        if (platform::vita::imePoll(confirmed, text)) {
+            if (confirmed) {
+                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                io.AddKeyEvent(ImGuiKey_A, true);
+                io.AddKeyEvent(ImGuiKey_A, false);
+                io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                io.AddKeyEvent(ImGuiKey_Delete, true);
+                io.AddKeyEvent(ImGuiKey_Delete, false);
+                if (!text.empty()) io.AddInputCharactersUTF8(text.c_str());
+            }
+            return;
+        }
+        if (platform::vita::imeActive()) return;
+
+        // A text field was tapped (PaperUI::field calls imeRequest) or an ImGui text box took focus.
+        std::string initial;
+        bool password = false;
+        if (platform::vita::imeTakeRequest(initial, password)) {
+            platform::vita::imeOpen(initial, password);
+            return;
+        }
+        const ImGuiID active = g->ActiveId;
+        const bool editing = io.WantTextInput && active != 0 && g->InputTextState.ID == active;
+        const bool tappedAgain = editing && ImGui::IsMouseClicked(0) && g->HoveredIdPreviousFrame == active;
+        if (editing && (active != lastActive_ || tappedAgain)) {
+            const ImGuiInputTextState& state = g->InputTextState;
+            const std::string current = state.TextSrc ? std::string(state.TextSrc, static_cast<std::size_t>(state.TextLen))
+                                                      : std::string();
+            platform::vita::imeOpen(current, (state.Flags & ImGuiInputTextFlags_Password) != 0);
+        }
+        lastActive_ = editing ? active : 0;
+    }
+
     VkContext* ctx_;
     bool live_ = false;
+    unsigned lastActive_ = 0;
 };
 
 }  // namespace rendering
@@ -157,6 +205,9 @@ void Window::refreshDrawableSize() {
 bool Window::initialize() {
     LOG_INFO("Initializing window: ", config.title, " (Vita: vitaGL display, SDL3 for input)");
 
+    // The keyboard is the client's own sceImeDialog (vita_ime.cpp), opened with the field's text; SDL's would open
+    // empty and show a second dialog (VITA-55).
+    SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         LOG_ERROR("Failed to initialize SDL: ", SDL_GetError());
         return false;
