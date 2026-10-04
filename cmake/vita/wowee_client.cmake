@@ -124,6 +124,16 @@ target_include_directories(lua51_vita SYSTEM PUBLIC ${WOWEE_ROOT_DIR}/extern/lua
 # holds the first frame for about a second (VITA-53).
 set(WOWEE_VITAGL_LIB vitaGL)
 set(WOWEE_VITAGL_FILE "$ENV{VITASDK}/arm-vita-eabi/lib/libvitaGL.a")
+# The client needs the patched build: the SDK's vitaGL samples DXT textures as zero depending on upload history (DEV_SETUP
+# section 22). Default to build-vita/vitagl; configure fails with the fix if it is missing.
+if(NOT VITAGL_CUSTOM AND NOT WOWEE_ALLOW_SDK_VITAGL)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/build-vita/vitagl/libvitaGL.a")
+        set(VITAGL_CUSTOM "build-vita/vitagl")
+    else()
+        message(FATAL_ERROR "wowee_client needs the patched vitaGL: run tools/vita/build_vitagl.sh first "
+                            "(or pass -DWOWEE_ALLOW_SDK_VITAGL=ON to build with the SDK's, which breaks DXT textures).")
+    endif()
+endif()
 if(VITAGL_CUSTOM)
     get_filename_component(_vgl_dir "${VITAGL_CUSTOM}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
     set(WOWEE_VITAGL_LIB ${_vgl_dir}/libvitaGL.a)

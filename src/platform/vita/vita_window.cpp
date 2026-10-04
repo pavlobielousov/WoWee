@@ -236,8 +236,8 @@ bool Window::initialize() {
     int sharkLevel = SHARK_OPT_DEFAULT;
     if (const char* opt = std::getenv("WOWEE_SHARK_OPT"); opt && *opt >= '0' && *opt <= '4') sharkLevel = *opt - '0';
     LOG_WARNING("Shader compiler optimisation level ", sharkLevel);
-    vglSetupRuntimeShaderCompiler(static_cast<shark_opt>(sharkLevel), 0, 0, 0);
-    rendering::gl::setShaderCompilerLevel(sharkLevel);
+    rendering::gl::setShaderCompilerDefaultLevel(sharkLevel);
+    rendering::gl::applyShaderCompilerLevel(sharkLevel);
     const GLboolean resolutionFell = vglInitExtended(0, kScreenW, kScreenH, kRamThresholdBytes, SCE_GXM_MULTISAMPLE_NONE);
     if (vglMemTotal(VGL_MEM_VRAM) == 0 || glGetString(GL_VERSION) == nullptr) {
         LOG_ERROR("vitaGL did not initialise (no memory pools, no GL_VERSION)");

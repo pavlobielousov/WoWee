@@ -1,0 +1,22 @@
+diff --git a/source/utils/gpu_utils.c b/source/utils/gpu_utils.c
+index 4464db5..1155560 100644
+--- a/source/utils/gpu_utils.c
++++ b/source/utils/gpu_utils.c
+@@ -737,7 +737,7 @@ void gpu_alloc_compressed_texture(int32_t mip_level, uint32_t w, uint32_t h, Sce
+ 				case SCE_GXM_TEXTURE_FORMAT_UBC2_ABGR:
+ 				case SCE_GXM_TEXTURE_FORMAT_UBC3_ABGR:
+ 				case SCE_GXM_TEXTURE_FORMAT_UBC5_GR:
+-					if (aligned_width == w && aligned_height == h && h <= 2048 && w <= 2048) {
++					if (0 && aligned_width == w && aligned_height == h && h <= 2048 && w <= 2048) { // WOWEE: CPU swizzle for UBC2/UBC3, not the hardware transfer (VITA-14)
+ #ifdef TEXTURE_UPLOADS_SPEEDHACK
+ 						void *mapped_src = data;
+ #else
+@@ -770,7 +770,7 @@ void gpu_alloc_compressed_texture(int32_t mip_level, uint32_t w, uint32_t h, Sce
+ 					}
+ 					break;
+ 				default:
+-					if (aligned_width == w && aligned_height == h && h <= 2048) {
++					if (0 && aligned_width == w && aligned_height == h && h <= 2048) { // WOWEE: CPU swizzle for UBC1 too (VITA-14)
+ #ifdef TEXTURE_UPLOADS_SPEEDHACK
+ 						void *mapped_src = data;
+ #else

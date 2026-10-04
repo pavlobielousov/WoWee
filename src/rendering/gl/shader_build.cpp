@@ -3,6 +3,7 @@
 
 #include "core/logger.hpp"
 #include "platform/vita/shader_cache_logic.hpp"
+#include "rendering/gl/gl_program.hpp"
 #include "rendering/gl/shader_cache.hpp"
 #include "rendering/gl/shader_manifest.hpp"
 
@@ -141,26 +142,10 @@ bool compilerModulePresent() {
 
 /// Compile and link one program, then throw it away: what is wanted is the cache entry it leaves.
 bool buildProgram(const ProgramDef& def) {
-    GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(v, 1, &def.vertex, nullptr);
-    glShaderSource(f, 1, &def.fragment, nullptr);
-    glCompileShader(v);
-    glCompileShader(f);
-    GLuint program = glCreateProgram();
-    glAttachShader(program, v);
-    glAttachShader(program, f);
-    glLinkProgram(program);
-    GLint linked = 0;
-    glGetProgramiv(program, GL_LINK_STATUS, &linked);
-    if (!linked) {
-        char log[256] = {};
-        glGetProgramInfoLog(program, sizeof log - 1, nullptr, log);
-        LOG_ERROR("Shader program '", def.name, "' failed to link: ", log);
-    }
+    const GLuint program = linkProgram(def);
+    if (program == 0) return false;
     glDeleteProgram(program);
-    glDeleteShader(v);
-    glDeleteShader(f);
-    return linked != 0;
+    return true;
 }
 
 std::string etaText(double ms) {

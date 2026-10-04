@@ -7,6 +7,8 @@
 // VITA-14 replaces them with the renderer's real shaders and makes the manifest unconditional.
 #include "rendering/gl/shader_manifest.hpp"
 
+#include "rendering/gl/shader_sources.hpp"
+
 #include <cstdlib>
 
 namespace wowee::rendering::gl {
@@ -202,18 +204,33 @@ const char* const kStressFS =
 }  // namespace
 
 const std::vector<ProgramDef>& shaderManifest() {
-    static const std::vector<ProgramDef> selftest = {
-        {"terrain (2 layers)", ProgramClass::Plain, kTerrainVS, kTerrainFS},
-        {"M2 static (alpha test)", ProgramClass::Plain, kM2VS, kM2FS},
-        {"sky dome", ProgramClass::Plain, kSkyVS, kSkyFS},
-        {"WMO group", ProgramClass::Lit, kWmoVS, kWmoFS},
-        {"water", ProgramClass::Lit, kWaterVS, kWaterFS},
-        {"skinned character", ProgramClass::Skinned, kCharVS, kCharFS},
-        {"stress (8 lights)", ProgramClass::Lit, kWmoVS, kStressFS},
+    // Developer stand-ins (WOWEE_SHADER_SELFTEST=1): realistic programs for timing the first-run build.
+    static const std::vector<ProgramDef> standIns = {
+        {"stand-in terrain (2 layers)", ProgramClass::Plain, kTerrainVS, kTerrainFS},
+        {"stand-in M2 static (alpha test)", ProgramClass::Plain, kM2VS, kM2FS},
+        {"stand-in sky dome", ProgramClass::Plain, kSkyVS, kSkyFS},
+        {"stand-in WMO group", ProgramClass::Lit, kWmoVS, kWmoFS},
+        {"stand-in water", ProgramClass::Lit, kWaterVS, kWaterFS},
+        {"stand-in skinned character", ProgramClass::Skinned, kCharVS, kCharFS},
+        {"stand-in stress (8 lights)", ProgramClass::Lit, kWmoVS, kStressFS},
     };
-    static const std::vector<ProgramDef> none;
+    // The renderer's own programs: EVERY program the renderer can build must be listed here, or the stale-file sweep
+    // deletes its cache entry at the next start (DEV_SETUP section 21).
+    static const std::vector<ProgramDef> all = [] {
+        std::vector<ProgramDef> list;
+        for (int layers = 0; layers <= 3; ++layers) list.push_back(terrainProgram(layers));
+        list.push_back(m2Program(M2Kind::Opaque));
+        list.push_back(m2Program(M2Kind::AlphaTest));
+        list.push_back(m2Program(M2Kind::Blend));
+        return list;
+    }();
+    static const std::vector<ProgramDef> withStandIns = [] {
+        std::vector<ProgramDef> list = all;
+        list.insert(list.end(), standIns.begin(), standIns.end());
+        return list;
+    }();
     const char* flag = std::getenv("WOWEE_SHADER_SELFTEST");
-    return (flag && *flag == '1') ? selftest : none;
+    return (flag && *flag == '1') ? withStandIns : all;
 }
 
 }  // namespace wowee::rendering::gl

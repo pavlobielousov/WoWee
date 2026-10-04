@@ -29,6 +29,12 @@ const std::string& shaderCacheDir();
 /// different level produces a different binary. Call before the first shader is compiled.
 void setShaderCompilerLevel(int level);
 
+/// The client's default level (O2) and the call that makes a level current: vitaGL's compiler setting and the cache tag.
+/// linkProgram applies a program's own level around its compile and puts the default back.
+void setShaderCompilerDefaultLevel(int level);
+int shaderCompilerDefaultLevel();
+void applyShaderCompilerLevel(int level);
+
 /// Turn the cache on/off (on by default). Off: the wrappers pass straight through.
 void setShaderCacheEnabled(bool enabled);
 
