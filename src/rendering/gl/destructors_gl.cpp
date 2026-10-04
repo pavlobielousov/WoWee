@@ -44,6 +44,5 @@ SkySystem::~SkySystem() = default;
 StarField::~StarField() = default;
 WaterRenderer::~WaterRenderer() = default;
 Weather::~Weather() = default;
-WMORenderer::~WMORenderer() = default;
 
 }  // namespace wowee::rendering

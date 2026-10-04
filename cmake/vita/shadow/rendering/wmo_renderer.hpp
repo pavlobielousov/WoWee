@@ -2,6 +2,7 @@
 // The Vita's copy: every declaration that mentions Vulkan is removed (ADR-001, VITA-52).
 #pragma once
 
+#include "rendering/gl/scene_params.hpp"
 #include "core/size_utils.hpp"
 #include "rendering/collision_geometry.hpp"
 #include "rendering/spatial_grid.hpp"
@@ -46,6 +47,12 @@ class RtScene;
  */
 class WMORenderer {
 public:
+    // ---- Vita (VITA-19): the GL half, src/rendering/gl/wmo_renderer_gl.cpp ----
+    bool glInitialize(pipeline::AssetManager* assets);
+    void glRender(const gl::SceneParams& scene);
+    [[nodiscard]] bool glReady() const;
+    [[nodiscard]] uint32_t glInstanceCount() const;
+    struct Gl;
     WMORenderer();
     ~WMORenderer();
 
@@ -445,6 +452,7 @@ public:
     void setDeferNormalMaps(bool defer) { deferNormalMaps_ = defer; }
 
 private:
+    std::unique_ptr<Gl> gl_;
     // WMO material UBO - matches WMOMaterial in wmo.frag.glsl
     struct WMOMaterialUBO {
         int32_t hasTexture;        // 0

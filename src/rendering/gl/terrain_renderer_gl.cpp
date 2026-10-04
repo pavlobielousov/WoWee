@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "pipeline/asset_manager.hpp"
 #include "rendering/frustum.hpp"
+#include "rendering/gl/gl_stats.hpp"
 #include "rendering/gl/gl_program.hpp"
 #include "rendering/gl/gl_texture.hpp"
 #include "rendering/gl/shader_sources.hpp"
@@ -292,6 +293,8 @@ bool TerrainRenderer::loadTerrain(const pipeline::TerrainMesh& mesh, const std::
 
 void TerrainRenderer::glRender(const gl::SceneParams& scene) {
     if (!glReady() || gl_->tiles.empty()) return;
+    static gl::FrameStats stats("terrain");
+    stats.begin();
 
     Frustum frustum;
     frustum.extractFromMatrix(scene.cullViewProj);
@@ -374,6 +377,11 @@ void TerrainRenderer::glRender(const gl::SceneParams& scene) {
     glUseProgram(0);
     renderedChunks = rendered;
     culledChunks = culled;
+    stats.end(rendered, rendered);
+    if (stats.frames == 0) {
+        LOG_WARNING("GL memory terrain: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), ", tiles ", gl_->tiles.size(),
+                    " buffers+alpha ", gl_->gpuBytes / 1024, " KB");
+    }
     furthestDrawnSq_ = furthest;
 }
 

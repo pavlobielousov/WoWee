@@ -122,6 +122,61 @@ const char* const kM2FragmentBody =
     "#endif\n"
     "}\n";
 
+
+// ---- WMO groups ----------------------------------------------------------------------------------------------------
+// Same fragment shader as the static M2 (texture times a per-vertex light, fog, alpha test or blend). The light follows
+// upstream's wmo.frag in three modes picked by uMode (weights, so no branch): x = exterior (ambient + sun, plus half the
+// baked vertex colour when the group has one, uMode.w), y = interior (the baked vertex colour, at least the WMO's
+// ambient), z = unlit.
+const char* const kWmoVertex =
+    "precision highp float;\n"
+    "attribute vec3 aPosition;\n"
+    "attribute vec3 aNormal;\n"
+    "attribute vec2 aTexCoord;\n"
+    "attribute vec4 aColor;\n"
+    "uniform mat4 uViewProj;\n"
+    "uniform mat4 uModel;\n"
+    "uniform vec4 uLightDir;\n"
+    "uniform vec3 uLightColor;\n"
+    "uniform vec3 uAmbient;\n"
+    "uniform vec3 uWmoAmbient;\n"
+    "uniform vec4 uEye;\n"
+    "uniform vec4 uFog;\n"
+    "uniform vec4 uMode;\n"
+    "varying highp vec2 vTexCoord;\n"
+    "varying vec3 vLight;\n"
+    "varying float vFog;\n"
+    "void main() {\n"
+    "    vec4 world = uModel * vec4(aPosition, 1.0);\n"
+    "    float diff = max(dot(normalize(mat3(uModel) * aNormal), normalize(-uLightDir.xyz)), 0.0);\n"
+    "    vec3 ext = uAmbient + diff * uLightColor + uMode.w * aColor.rgb * 0.5;\n"
+    "    vec3 inner = max(aColor.rgb, uWmoAmbient);\n"
+    "    vLight = uMode.x * ext + uMode.y * inner + vec3(uMode.z);\n"
+    "    vFog = clamp((uFog.y - distance(uEye.xyz, world.xyz)) / (uFog.y - uFog.x), 0.0, 1.0);\n"
+    "    vTexCoord = aTexCoord;\n"
+    "    gl_Position = uViewProj * world;\n"
+    "}\n";
+
+// ---- scene blit ---------------------------------------------------------------------------------------------------
+// Scales the off-screen 3D scene up to the screen (the render scale, VITA-19): a quad in clip space, one texture fetch.
+const char* const kBlitVertex =
+    "precision highp float;\n"
+    "attribute vec2 aPosition;\n"
+    "attribute vec2 aTexCoord;\n"
+    "varying highp vec2 vTexCoord;\n"
+    "void main() {\n"
+    "    vTexCoord = aTexCoord;\n"
+    "    gl_Position = vec4(aPosition, 0.0, 1.0);\n"
+    "}\n";
+
+const char* const kBlitFragment =
+    "precision mediump float;\n"
+    "varying highp vec2 vTexCoord;\n"
+    "uniform sampler2D uTexture;\n"
+    "void main() {\n"
+    "    gl_FragColor = vec4(texture2D(uTexture, vTexCoord).rgb, 1.0);\n"
+    "}\n";
+
 struct Built {
     std::string vertex;
     std::string fragment;
@@ -134,6 +189,21 @@ Built* terrainSources() {
         for (int i = 0; i < 4; ++i) {
             built[i].vertex = kTerrainVertex;
             built[i].fragment = "#define TERRAIN_LAYERS " + std::to_string(i) + "\n" + kTerrainFragmentBody;
+        }
+        done = true;
+    }
+    return built;
+}
+
+Built* wmoSources() {
+    static Built built[3];
+    static bool done = false;
+    if (!done) {
+        const char* defs[3] = {"#define M2_ALPHATEST 0\n#define M2_BLEND 0\n", "#define M2_ALPHATEST 1\n#define M2_BLEND 0\n",
+                               "#define M2_ALPHATEST 0\n#define M2_BLEND 1\n"};
+        for (int i = 0; i < 3; ++i) {
+            built[i].vertex = kWmoVertex;
+            built[i].fragment = std::string(defs[i]) + kM2FragmentBody;
         }
         done = true;
     }
@@ -186,6 +256,26 @@ const ProgramDef& m2Program(M2Kind kind) {
             const int level = i == static_cast<int>(M2Kind::AlphaTest) ? 3 : -1;
             defs[i] = ProgramDef{names[i], ProgramClass::Plain, b[i].vertex.c_str(), b[i].fragment.c_str(),
                                  {"aPosition", "aNormal", "aTexCoord"}, level};
+        }
+        done = true;
+    }
+    return defs[static_cast<int>(kind)];
+}
+
+const ProgramDef& blitProgram() {
+    static const ProgramDef def{"scene blit", ProgramClass::Plain, kBlitVertex, kBlitFragment, {"aPosition", "aTexCoord"}};
+    return def;
+}
+
+const ProgramDef& wmoProgram(M2Kind kind) {
+    static const char* const names[3] = {"WMO (opaque)", "WMO (alpha test)", "WMO (blend)"};
+    static ProgramDef defs[3];
+    static bool done = false;
+    if (!done) {
+        Built* b = wmoSources();
+        for (int i = 0; i < 3; ++i) {
+            defs[i] = ProgramDef{names[i], ProgramClass::Plain, b[i].vertex.c_str(), b[i].fragment.c_str(),
+                                 {"aPosition", "aNormal", "aTexCoord", "aColor"}, i == static_cast<int>(M2Kind::AlphaTest) ? 3 : -1};
         }
         done = true;
     }

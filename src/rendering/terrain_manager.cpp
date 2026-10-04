@@ -687,6 +687,26 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
 
             const std::string& wmoPath = pending->terrain.wmoNames[placement.nameId];
 
+#ifdef __vita__
+            {
+                // A building that is already on the GPU, or already in this tile, is not parsed again: a placement then
+                // only needs its id and transform (every parse is several MB of vertex data in a heap of 288 MB).
+                uint32_t knownId = static_cast<uint32_t>(std::hash<std::string>{}(wmoPath));
+                if (knownId == 0) knownId = 1;
+                bool known = wmoRenderer->isModelLoaded(knownId);
+                for (const auto& r : pending->wmoModels) known = known || r.modelId == knownId;
+                if (known) {
+                    PendingTile::WMOReady ready;
+                    ready.modelId = knownId;
+                    ready.uniqueId = placement.uniqueId;
+                    ready.position = core::coords::adtToWorld(placement.position[0], placement.position[1], placement.position[2]);
+                    ready.rotation = placementEuler(placement.rotation);
+                    ready.scale = placement.scale > 0 ? static_cast<float>(placement.scale) / 1024.0f : 1.0f;
+                    pending->wmoModels.push_back(std::move(ready));
+                    continue;
+                }
+            }
+#endif
             // Check for WOB open format first (custom zone buildings)
             bool wobLoaded = false;
             pipeline::WMOModel wmoModel;
@@ -750,7 +770,14 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                     wmoAlreadyPrepared = !preparedWmoUniqueIds_.insert(placement.uniqueId).second;
                 }
 
+                #ifdef __vita__
+                // The furniture and clutter inside buildings (thousands of M2 instances per town) is off until measured:
+                // WOWEE_VITA_WMO_DOODADS=1 turns it on.
+                static const bool vitaWmoDoodads = std::getenv("WOWEE_VITA_WMO_DOODADS") != nullptr;
+                if (vitaWmoDoodads && !wmoAlreadyPrepared && !wmoModel.doodadSets.empty() && !wmoModel.doodads.empty()) {
+#else
                 if (!wmoAlreadyPrepared && !wmoModel.doodadSets.empty() && !wmoModel.doodads.empty()) {
+#endif
                     glm::mat4 wmoMatrix(1.0f);
                     wmoMatrix = glm::translate(wmoMatrix, pos);
                     wmoMatrix = glm::rotate(wmoMatrix, rot.z, glm::vec3(0, 0, 1));
@@ -902,7 +929,13 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                     // here on the worker thread and lets it go, which is where
                     // that cost already was.
                     auto blp = assetManager->loadTexture(blpKey, true);
+#ifdef __vita__
+                    // No normal maps on the Vita: do not decode every texture to RGBA just to throw the result away.
+                    if (blp.isValid()) pending->preloadedWMOTextures[blpKey] = std::move(blp);
+                    if (false) {
+#else
                     if (blp.isValid()) {
+#endif
                         float variance = 0.0f;
                         const std::vector<uint8_t> decoded =
                             blp.isBlockCompressed()

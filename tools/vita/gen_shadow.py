@@ -125,7 +125,17 @@ EXTRA_MEMBERS['m2_renderer.hpp'] = ('M2Renderer', """    // ---- Vita (VITA-19):
     std::unique_ptr<Gl> gl_;
 """)
 
+EXTRA_MEMBERS['wmo_renderer.hpp'] = ('WMORenderer', """    // ---- Vita (VITA-19): the GL half, src/rendering/gl/wmo_renderer_gl.cpp ----
+    bool glInitialize(pipeline::AssetManager* assets);
+    void glRender(const gl::SceneParams& scene);
+    [[nodiscard]] bool glReady() const;
+    [[nodiscard]] uint32_t glInstanceCount() const;
+    struct Gl;
+""", """    std::unique_ptr<Gl> gl_;
+""")
+
 EXTRA_INCLUDES = {
+    'wmo_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'm2_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'terrain_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
 }

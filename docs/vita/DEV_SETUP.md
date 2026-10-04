@@ -743,3 +743,22 @@ Measured on the real Vita, 288 MB heap, `WOWEE_LOG_HEAP=1` (adds `{heap N KB}` f
 - Static M2 doodads draw (`src/rendering/gl/m2_renderer_gl.cpp`): per-model VBO/IBO, base mesh only, three program classes (opaque, alpha test, blend), frustum + distance culling (60 yards plus 40 per yard of radius, never past the fog), no collision, animation, particles or texture scrolling yet.
 - **A prepared tile can take 100 MB.** Goldshire tile [32,48] (8 WMOs, 6500 WMO doodads, 1500 M2 placements) went from heap 129 to 235 MB while only being prepared. Until the WMO renderer exists the Vita skips WMO preparation (`prepareTile`), loads creature models not at all (`processCreatureSpawnQueue`) and lets one tile finalize at a time (`processReadyTiles`, `maxReadyQueueSize_` 1). Peak after that: 198 MB of 288 with 9 tiles. The WMO renderer must bring its own memory plan (parse, upload, drop the CPU copy per group).
 - Before the data move of section 27 these reads were failing, so the heap looked healthy at 190 MB; a failing read hides the memory a feature needs.
+
+## 29. Frame time with buildings (VITA-19)
+
+Goldshire church, camera still, measured on the real Vita with `WOWEE_LOG_LEVEL=info` (the `frame budget` and `GL stats` lines).
+
+| change | fps (ms) |
+|---|---|
+| terrain + WMO + M2, view distance 1200, full resolution | 19.5 (51) |
+| 3D at 0.75 of the screen (off-screen target, scaled up) | 21.5 (47) |
+| + view distance 500 yards (fog 225..475) | **32.4 (31)** |
+| same, back at full resolution (`WOWEE_RENDER_SCALE=1`) | **33-35 (29-30)**, the new default |
+
+- The cost was draw submission: about 1800 draws a frame (926 terrain chunks, 553 WMO batches, 349 M2 batches) at about 10 us each, 18 ms of CPU. A short view distance cuts chunks, buildings and doodads together. `WOWEE_VIEW_DISTANCE` (default 500) and `WOWEE_RENDER_SCALE` (default 1; 0.75 gave nothing once the distance was short, `src/rendering/gl/scene_target.cpp`) are the knobs.
+- **Test one renderer alone and it looks free** because the display is capped at 60 fps (16.7 ms): a renderer that costs 12 ms hides under it. Compare against the sum, or look at `GL stats <name>` (CPU per frame and draw calls, logged every 300 frames by `gl_stats.hpp`).
+- Live switches without a restart: `ux0:data/wowee/gl.cfg` with the words `noterrain nowmo nom2` (read every 60 frames, delete the file to reset; do not forget it: it hid the buildings in one test).
+- **WoWee turns the camera round by itself after 2 idle minutes** (`idleOrbit`, re-applied from the saved settings by the game screen): it moves the picture under a test. The Vita renderer forces it off each frame.
+- Did not help: bigger sceGxm parameter/VDM/vertex/fragment buffers (`WOWEE_GXM_*` knobs, no change in fps, and they took 16 MB of video memory).
+- **GPU memory is full** in the Goldshire area: vitaGL's pools (video 96 MB, RAM 25, physically contiguous 26) read 0 MB free after the third tile. Terrain holds 53 MB (the alpha maps are RGBA8, 4.2 MB a tile), buildings 43 MB of buffers and 29 MB of textures, doodads 5 MB. Not yet shown to cost frame time, but there is no headroom for water, characters or more tiles. To do: RGBA4444 alpha maps, packed vertices, texture mip skipping, drop far tiles' buffers.
+- The link can fail with "Cannot allocate N bytes for SCE data" after code growth; the padding is now 56 KB (section 17).
