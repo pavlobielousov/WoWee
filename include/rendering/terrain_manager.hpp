@@ -473,7 +473,11 @@ private:
     // Each prepared tile can hold 100–500 MB of decoded textures in RAM.
     // Workers sleep when this limit is reached, letting the main thread
     // finalize (GPU-upload + free) before more tiles are prepared.
+#ifdef __vita__
+    static constexpr size_t maxReadyQueueSize_ = 1;
+#else
     static constexpr size_t maxReadyQueueSize_ = 3;
+#endif
 
     // In-RAM tile cache (LRU) to avoid re-reading from disk
     struct CachedTile {

@@ -727,3 +727,19 @@ Measured on the real Vita, 288 MB heap, `WOWEE_LOG_HEAP=1` (adds `{heap N KB}` f
 - Peak heap from login to terrain: 262 MB before, 184 MB after (5 terrain tiles, ~51 fps). Spell.dbc still costs ~93 MB while loading (raw file 49 MB plus the parsed copy) and ~50 MB stays resident.
 - Trap: building `wowee_client` does not regenerate `client.bin`; build the `wowee_client.vpk-vpk` target before `deploy.sh`, and check the log line `file cache: N MB` (or a first-line marker) to know which binary ran.
 - Still large: manifest 43 MB / 16 s (VITA-25), ItemDisplayInfo 13-20 MB, Spell.dbc resident.
+
+
+## 27. Path depth limit (VITA-19)
+
+**sceIo refuses any path with more than 10 components below the device name** (`ux0:a/b/c/d/e/f/g/h/i/j` works, one more fails with `0x80010016`, which looks exactly like "does not exist"). Measured on the real Vita with a chain of nested folders. It applies to `sceIoOpen`, `sceIoGetstat` and everything built on them, but not to directory listing (`sceIoDopen` lists the files, `stat` on them fails), and the FTP server of vitacompanion is not subject to it, so the files look fine from the Mac. Symptom: `Manifest entry exists but file unreadable` / `Texture not found` for files that are on the card (about 5000 failed reads in one world entry, props and textures drawn white or missing).
+
+- The default data root `ux0:data/wowee/Data` costs 5 components (`data/wowee/Data/expansions/wotlk`), leaving 5 for the game's own tree; the extraction goes up to 9 (7 or more for about 5000 files). Everything under `world/azeroth/*/passivedoodads/<model>/` is already 6.
+- **Put the data at `ux0:/expansions/<id>/...` and set `WOW_DATA_PATH=ux0:` in `ux0:data/wowee/env.txt`.** That leaves 8 levels; only 18 files (15 `world/wmo`, 3 inside the Windows launcher app) are still too deep. Verified: `Assets: Wrath of the Lich King - 201,592 files` from `ux0:/expansions/wotlk`. Moving the folder on the card is instant (`RNFR`/`RNTO` over FTP, same filesystem).
+- The startup log warns when the data root is too deep (`Vita: the data root is N levels deep ...`).
+- Trap while finding this: a diagnostic that stats every file on the main thread at start-up blocks the app on the progress screen for many minutes; do such scans on a thread or from the Mac.
+
+## 28. Doodads and the memory of a prepared tile (VITA-19)
+
+- Static M2 doodads draw (`src/rendering/gl/m2_renderer_gl.cpp`): per-model VBO/IBO, base mesh only, three program classes (opaque, alpha test, blend), frustum + distance culling (60 yards plus 40 per yard of radius, never past the fog), no collision, animation, particles or texture scrolling yet.
+- **A prepared tile can take 100 MB.** Goldshire tile [32,48] (8 WMOs, 6500 WMO doodads, 1500 M2 placements) went from heap 129 to 235 MB while only being prepared. Until the WMO renderer exists the Vita skips WMO preparation (`prepareTile`), loads creature models not at all (`processCreatureSpawnQueue`) and lets one tile finalize at a time (`processReadyTiles`, `maxReadyQueueSize_` 1). Peak after that: 198 MB of 288 with 9 tiles. The WMO renderer must bring its own memory plan (parse, upload, drop the CPU copy per group).
+- Before the data move of section 27 these reads were failing, so the heap looked healthy at 190 MB; a failing read hides the memory a feature needs.

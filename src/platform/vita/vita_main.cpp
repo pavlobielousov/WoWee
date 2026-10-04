@@ -1,5 +1,6 @@
 // Vita process setup (VITA-6): newlib heap, main thread stack, clocks, sysmodules, sceNet,
 // ux0:data/wowee, env.txt. initProcess() is the first call in the shared main().
+#include <cstring>
 #include "platform/vita/vita_platform.hpp"
 
 #include "core/config_paths.hpp"
@@ -129,6 +130,21 @@ void logStartupReport() {
     }
     const char* data = std::getenv("WOW_DATA_PATH");
     LOG_WARNING("Vita: data root   ", data ? data : "(unset)");
+    if (data) {
+        // sceIo refuses any path of more than 10 components below the device name (measured on the Vita, VITA-19): the
+        // data root, "expansions", the expansion id, and up to 8 levels of the game's own tree (a few dozen files go
+        // to 9).
+        int depth = 0;
+        bool inName = false;
+        for (const char* c = std::strchr(data, ':') ? std::strchr(data, ':') + 1 : data; *c; ++c) {
+            if (*c == '/') inName = false;
+            else if (!inName) { inName = true; ++depth; }
+        }
+        if (depth + 2 + 8 > 10) {
+            LOG_WARNING("Vita: the data root is ", depth, " levels deep: game files nested more than ", 10 - depth - 2,
+                        " levels will not open (limit 10 path components); keep it at ux0: or one folder, see DEV_SETUP");
+        }
+    }
     LOG_WARNING("Vita: config root ", core::getConfigRoot());
     core::enterThread(core::ThreadRole::Main);
 }

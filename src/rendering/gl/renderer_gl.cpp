@@ -74,7 +74,13 @@
 namespace wowee::rendering {
 
 void Renderer::beginFrame() {
-    glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
+    // In the world the background is the fog colour, so distant terrain fades into the sky rather than into a dark box.
+    if (terrainRenderer) {
+        const gl::SceneParams sky;
+        glClearColor(sky.fogColor.x, sky.fogColor.y, sky.fogColor.z, 1.0f);
+    } else {
+        glClearColor(0.05f, 0.07f, 0.12f, 1.0f);
+    }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
@@ -145,6 +151,11 @@ void Renderer::endFrame() {
         const struct mallinfo heap = mallinfo();  // newlib: the whole heap is one arena of WOWEE_VITA_HEAP_MB
         LOG_WARNING("Vita frames presented: ", frames, ", heap in use ", static_cast<unsigned>(heap.uordblks) / (1024 * 1024),
                     " MB of ", static_cast<unsigned>(heap.arena) / (1024 * 1024), " MB arena");
+        if (camera && terrainManager) {
+            const glm::vec3 e = camera->getPosition();
+            const auto h = terrainManager->getHeightAt(e.x, e.y);
+            LOG_WARNING("Camera eye (", e.x, ", ", e.y, ", ", e.z, ") ground ", h ? *h : -9999.0f, "");
+        }
     }
 }
 
@@ -193,6 +204,13 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             return false;
         }
     }
+    if (!m2Renderer) {
+        m2Renderer = std::make_unique<M2Renderer>();
+        if (!m2Renderer->glInitialize(assetManager)) {
+            LOG_ERROR("M2 renderer (GL) did not start, drawing no doodads");
+            m2Renderer.reset();
+        }
+    }
     if (!terrainManager) {
         terrainManager = std::make_unique<TerrainManager>();
         if (!terrainManager->initialize(assetManager, terrainRenderer.get())) {
@@ -201,6 +219,7 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             return false;
         }
         if (cameraController) cameraController->setTerrainManager(terrainManager.get());
+        if (m2Renderer) terrainManager->setM2Renderer(m2Renderer.get());
     }
     setActiveMapName(mapName);
     return true;
@@ -256,13 +275,14 @@ void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]]
     gl::SceneParams scene;
     scene.view = camera->getViewMatrix();
     // OpenGL clip space: the camera's own projection is Vulkan's (depth 0..1, Y flipped), so build the GL one (DEV_SETUP 22).
-    scene.projection = glm::perspectiveRH_NO(glm::radians(camera->getFovDegrees()), camera->getAspectRatio(), 2.0f, 4000.0f);
+    scene.projection = glm::perspectiveRH_NO(glm::radians(camera->getFovDegrees()), camera->getAspectRatio(), 0.25f, 4000.0f);
     scene.cullViewProj = camera->getViewProjectionMatrix();
     scene.eye = camera->getPosition();
     scene.viewDistance = viewDistance_;
     scene.fogStart = viewDistance_ * 0.45f;
     scene.fogEnd = viewDistance_ * 0.95f;
     terrainRenderer->glRender(scene);
+    if (m2Renderer && m2Renderer->glReady()) m2Renderer->glRender(scene);
 }
 
 void Renderer::resetCombatVisualState() { }
