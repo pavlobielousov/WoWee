@@ -2497,7 +2497,12 @@ void TerrainManager::streamTiles() {
                 }
 
                 // Circular pattern: skip corner tiles beyond radius (Euclidean distance)
+#ifdef __vita__
+                // A square: at radius 1 the circle is a plus and leaves holes at the corners, which the camera sees.
+                if (false) {
+#else
                 if (dx*dx + dy*dy > loadRadius*loadRadius) {
+#endif
                     continue;
                 }
 
