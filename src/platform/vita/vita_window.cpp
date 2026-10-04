@@ -14,6 +14,7 @@
 
 #include "core/logger.hpp"
 #include "platform/vita/ime_dialog.hpp"
+#include "rendering/gl/shader_cache.hpp"
 #include "rendering/imgui_backend.hpp"
 #include "rendering/ui_texture.hpp"
 
@@ -25,6 +26,7 @@
 #include <vitaGL.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <cstdint>
 
 // vitaGL has no glDetachShader and the stock imgui_impl_opengl3 calls it after linking its program (measured,
@@ -243,6 +245,12 @@ bool Window::initialize() {
         LOG_WARNING("vitaGL memory ", kPoolNames[pool], ": ",
                  static_cast<unsigned long long>(vglMemFree(type) / 1024), " KB free of ",
                  static_cast<unsigned long long>(vglMemTotal(type) / 1024), " KB");
+    }
+
+    // WOWEE_SHADER_REBUILD=1 in env.txt forces every shader to be compiled again (VITA-53).
+    if (const char* rebuild = std::getenv("WOWEE_SHADER_REBUILD"); rebuild && *rebuild == '1') {
+        LOG_WARNING("WOWEE_SHADER_REBUILD=1: clearing the shader cache");
+        rendering::gl::clearShaderCache();
     }
 
     vkContext = std::make_unique<rendering::VkContext>();
