@@ -338,13 +338,13 @@ void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]]
     scene.viewDistance = viewDistance;
     scene.fogStart = viewDistance * 0.45f;
     scene.fogEnd = viewDistance * 0.95f;
-    // The 3D scene is drawn at a fraction of the screen size and scaled up (WOWEE_RENDER_SCALE in env.txt, default 0.75;
-    // 1 = full size). Created on first use: the screen is 960x544 on every Vita.
+    // The 3D scene is drawn at a fraction of the screen size and scaled up (WOWEE_RENDER_SCALE in env.txt, default 1 = full size;
+    // 0.75 gave nothing once the view distance was short). Created on first use: the screen is 960x544 on every Vita.
     static gl::SceneTarget target;
     static bool targetTried = false;
     if (!targetTried) {
         targetTried = true;
-        float scale = 0.75f;
+        float scale = 1.0f;
         if (const char* v = std::getenv("WOWEE_RENDER_SCALE")) scale = static_cast<float>(std::atof(v));
         target.initialize(960, 544, scale);
     }
