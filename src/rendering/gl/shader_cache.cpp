@@ -6,6 +6,7 @@
 #include "platform/vita/vita_platform.hpp"
 
 #include <vitaGL.h>
+#include <vitashark.h>
 
 #include <psp2/kernel/processmgr.h>
 
@@ -90,6 +91,17 @@ const std::string& shaderCacheDir() {
 void setShaderCacheEnabled(bool enabled) { g_enabled = enabled; }
 
 void setShaderCompilerLevel(int level) { g_tag = std::string(WOWEE_VITA_GL_TAG) + "-o" + std::to_string(level); }
+
+namespace {
+int g_defaultLevel = 2;
+}
+void setShaderCompilerDefaultLevel(int level) { g_defaultLevel = level; }
+int shaderCompilerDefaultLevel() { return g_defaultLevel; }
+
+void applyShaderCompilerLevel(int level) {
+    vglSetupRuntimeShaderCompiler(static_cast<shark_opt>(level), 0, 0, 0);
+    setShaderCompilerLevel(level);
+}
 
 void clearShaderCache() {
     std::error_code ec;

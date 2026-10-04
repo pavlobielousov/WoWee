@@ -93,3 +93,6 @@ Counts come from three throw-away scripts over the tree at `origin/vita` on 2026
 - DXT1/3/5 and DXT mips work as the decision assumed; one vitaGL state quirk is recorded in the DEV_SETUP section.
 - First-run compile cost, measured with heavier stand-in shaders: 357 ms (terrain) to **1069 ms (skinned character)**, 573 to 749 ms for WMO and water; a plausible v1 set is about 12 s, 40 mixed programs about 30 s, and each skinned permutation is 1 s or more. This is why decision 5 ships precompiled binaries and caps permutations; a first-run compile on the user's console stays the fallback (a progress screen for 10 to 30 s, once).
 
+## Correction 2026-10-04 (VITA-14): DXT textures work only with a patched vitaGL
+The update above says "DXT1/3/5 and DXT mips work as the decision assumed". That was luck of upload history: the SDK's vitaGL copies each compressed level with an asynchronous hardware transfer from a reusable temporary buffer, so DXT textures can sample as zero (and back-to-back uploads can hang). The Vita client therefore links a vitaGL built by `tools/vita/build_vitagl.sh` with `tools/vita/patches/vitagl-compressed-cpu-swizzle.patch` (CPU swizzle for every compressed upload). Details, the fill-rate and draw-cost numbers and the compiler-level finding are in `DEV_SETUP.md` section 22. The decision itself (vitaGL) stands.
+

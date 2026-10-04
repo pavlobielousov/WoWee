@@ -8,6 +8,7 @@
 #include "core/window.hpp"
 #include "rendering/imgui_backend.hpp"
 #include "rendering/animation_controller.hpp"
+#include "rendering/gl/shader_selftest.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
 #include "rendering/character_preview.hpp"
@@ -104,6 +105,7 @@ bool Renderer::initialize(core::Window* win) {
     // VITA-18 and on; until then a frame is a clear colour and the interface.
     window = win;
     LOG_INFO("Renderer (Vita skeleton): initialised, interface only");
+    gl::runShaderSelfTest();  // WOWEE_GL_SELFTEST=1 in env.txt (VITA-14)
     return true;
 }
 
