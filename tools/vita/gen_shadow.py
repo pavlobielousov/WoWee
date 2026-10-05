@@ -130,6 +130,8 @@ EXTRA_MEMBERS['wmo_renderer.hpp'] = ('WMORenderer', """    // ---- Vita (VITA-19
     void glRender(const gl::SceneParams& scene);
     [[nodiscard]] bool glReady() const;
     [[nodiscard]] uint32_t glInstanceCount() const;
+    /// Builds collision for the buildings near `focus` (a worker thread) and drops it for the far ones.
+    void glUpdateCollision(const glm::vec3& focus);
     struct Gl;
 """, """    std::unique_ptr<Gl> gl_;
 """)

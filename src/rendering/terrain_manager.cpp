@@ -175,6 +175,11 @@ bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer*
     // Keep this lower so decompressed MPQ file cache can stay very aggressive.
     auto& memMonitor = core::MemoryMonitor::getInstance();
     tileCacheBudgetBytes_ = memMonitor.getRecommendedCacheBudget() / 4;
+#ifdef __vita__
+    // Parsed tiles kept for a quick reload are heap the Vita does not have (about 36 MB of a 288 MB heap, retained after the
+    // tile was uploaded); a tile that comes back is read from the card again.
+    tileCacheBudgetBytes_ = 4ull * 1024 * 1024;
+#endif
     LOG_INFO("Terrain tile cache budget: ", tileCacheBudgetBytes_ / (1024 * 1024), " MB (dynamic)");
 
     // Start background worker pool (dynamic: scales with available cores)

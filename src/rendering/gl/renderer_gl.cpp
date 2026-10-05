@@ -68,6 +68,7 @@
 #include "stb_image_write.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
@@ -269,6 +270,10 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (cameraController) cameraController->setTerrainManager(terrainManager.get());
         if (m2Renderer) terrainManager->setM2Renderer(m2Renderer.get());
         if (wmoRenderer) terrainManager->setWMORenderer(wmoRenderer.get());
+        if (cameraController) {
+            if (wmoRenderer) cameraController->setWMORenderer(wmoRenderer.get());
+            if (m2Renderer) cameraController->setM2Renderer(m2Renderer.get());
+        }
     }
     setActiveMapName(mapName);
     return true;
@@ -414,7 +419,29 @@ void Renderer::unregisterPreview([[maybe_unused]] CharacterPreview* preview) { }
 void Renderer::update(float deltaTime) {
     // The game screen re-applies the saved setting (default on) every time it is shown: keep the idle orbit off here.
     if (cameraController) cameraController->setIdleOrbitEnabled(false);
-    if (cameraController) cameraController->update(deltaTime);
+    if (wmoRenderer && camera) wmoRenderer->glUpdateCollision(camera->getPosition());
+    {
+        // Where the collision time goes (VITA-57): every WMO query of the previous frame (camera controller and game logic
+        // alike), and the camera controller's own update time.
+        static double controllerMs = 0.0, wmoMs = 0.0;
+        static long wmoCalls = 0;
+        static int frames = 0;
+        if (wmoRenderer) {
+            wmoMs += wmoRenderer->getQueryTimeMs();
+            wmoCalls += wmoRenderer->getQueryCallCount();
+            wmoRenderer->resetQueryStats();
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        if (cameraController) cameraController->update(deltaTime);
+        controllerMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        if (++frames == 120) {
+            LOG_WARNING("Collision cost per frame: camera controller ", controllerMs / frames, " ms, WMO queries (whole frame) ",
+                        wmoMs / frames, " ms in ", static_cast<double>(wmoCalls) / frames, " calls");
+            controllerMs = wmoMs = 0.0;
+            wmoCalls = 0;
+            frames = 0;
+        }
+    }
     if (terrainManager && camera) terrainManager->update(*camera, deltaTime);
 }
 

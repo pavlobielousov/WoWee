@@ -18,6 +18,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <malloc.h>
+#include <exception>
+#include <future>
+#include "core/thread_budget.hpp"
+#include "pipeline/wmo_group_path.hpp"
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
@@ -61,6 +66,8 @@ struct WMORenderer::Gl {
         std::size_t bytes = 0;
         std::size_t nextGroup = 0;
         bool setupDone = false;
+        std::string sourcePath;   // to parse it again for collision
+        int collision = 0;        // 0 none, 1 being built, 2 in loadedModels
     };
     struct Instance {
         uint32_t model = 0;
@@ -82,6 +89,15 @@ struct WMORenderer::Gl {
     bool ready = false;
     std::size_t gpuBytes = 0;
     int drawnGroups = 0, culledGroups = 0;
+    // Collision is built for the buildings near the player only, on a worker thread, and dropped when they are far: the
+    // grids cost about as much heap as the whole rest of the game around Goldshire (the heap hit 294 of 288 MB when every
+    // loaded building had them).
+    std::future<std::unique_ptr<WMORenderer::ModelData>> job;
+    uint32_t jobModel = 0;
+    unsigned collisionTick = 0;
+    static void fillCollisionGroup(const pipeline::WMOGroup& g, WMORenderer::GroupResources& gr);
+    static std::unique_ptr<WMORenderer::ModelData> buildCollisionModel(pipeline::AssetManager* assets, const std::string& path, uint32_t id);
+    static std::unique_ptr<WMORenderer::ModelData> buildCollisionModelUnchecked(pipeline::AssetManager* assets, const std::string& path, uint32_t id);
 };
 
 WMORenderer::WMORenderer() = default;
@@ -149,6 +165,9 @@ static void freeModel(WMORenderer::Gl& gl, std::size_t& gpuBytes, WMORenderer::G
 
 void WMORenderer::clearInstances() {
     if (gl_) gl_->instances.clear();
+    instances.clear();
+    instanceIndexById.clear();
+    spatialGrid.clear();
 }
 
 void WMORenderer::clearAll() {
@@ -156,6 +175,11 @@ void WMORenderer::clearAll() {
     for (auto& kv : gl_->models) freeModel(*gl_, gl_->gpuBytes, kv.second);
     gl_->models.clear();
     gl_->instances.clear();
+    instances.clear();
+    instanceIndexById.clear();
+    spatialGrid.clear();
+    loadedModels.clear();
+    loadingModels_.clear();
     std::lock_guard<std::mutex> lock(gl_->idMutex);
     gl_->completeIds.clear();
 }
@@ -272,6 +296,7 @@ WMORenderer::ModelLoadResult WMORenderer::loadModelIncremental(const pipeline::W
         }
     }
     gl_->gpuBytes += out.bytes;
+    out.sourcePath = model.sourcePath;
     {
         std::lock_guard<std::mutex> lock(gl_->idMutex);
         gl_->completeIds.insert(id);
@@ -290,6 +315,204 @@ static void worldBox(const glm::mat4& m, const glm::vec3& lo, const glm::vec3& h
     }
 }
 
+
+// What upstream's createGroupResources keeps for collision, and the model-level fields the collision code reads
+// (wmo_renderer.cpp); built from a freshly parsed WMO on a worker thread.
+void WMORenderer::Gl::fillCollisionGroup(const pipeline::WMOGroup& g, WMORenderer::GroupResources& gr) {
+    gr.groupFlags = g.flags;
+    gr.boundingBoxMin = g.boundingBoxMin;
+    gr.boundingBoxMax = g.boundingBoxMax;
+    if (g.vertices.empty() || g.indices.empty()) return;
+    gr.collisionVertices.reserve(g.vertices.size());
+    for (const pipeline::WMOVertex& v : g.vertices) gr.collisionVertices.push_back(v.position);
+    gr.collisionIndices = g.indices;
+    if (!g.triFlags.empty()) {
+        const std::size_t numTris = g.indices.size() / 3;
+        gr.triMopyFlags.resize(numTris, 0);
+        for (std::size_t t = 0; t < numTris; ++t) gr.triMopyFlags[t] = t < g.triFlags.size() ? g.triFlags[t] : 0;
+    }
+    gr.boundingBoxMin = gr.collisionVertices[0];
+    gr.boundingBoxMax = gr.collisionVertices[0];
+    for (const glm::vec3& v : gr.collisionVertices) {
+        gr.boundingBoxMin = glm::min(gr.boundingBoxMin, v);
+        gr.boundingBoxMax = glm::max(gr.boundingBoxMax, v);
+    }
+    gr.buildCollisionGrid();
+    std::size_t hull = 0, renderedSolid = 0;
+    for (uint8_t mopy : gr.triMopyFlags) {
+        if (mopy & 0x08) ++hull;
+        if ((mopy & 0x20) && !(mopy & 0x04)) ++renderedSolid;
+    }
+    const std::size_t tris = gr.collisionIndices.size() / 3;
+    gr.noBlockingTriangles = (tris > 0 && hull == 0 && renderedSolid == 0);
+}
+
+std::unique_ptr<WMORenderer::ModelData> WMORenderer::Gl::buildCollisionModel(pipeline::AssetManager* assets, const std::string& path, uint32_t id) {
+    core::enterThread(core::ThreadRole::AsyncObjectLoad);
+    try {
+        return buildCollisionModelUnchecked(assets, path, id);
+    } catch (const std::exception& e) {
+        // Out of memory in the middle of a big building: no collision for it, not an exit of the whole app.
+        LOG_WARNING("WMO collision for model ", id, " failed: ", e.what());
+        return std::make_unique<WMORenderer::ModelData>();
+    }
+}
+
+#ifdef __vita__
+extern "C" int _newlib_heap_size_user;
+#endif
+
+// Free heap, from the allocator (the heap is a fixed 288 MB block on the Vita).
+static std::size_t freeHeapBytes() {
+#ifdef __vita__
+    const struct mallinfo mi = mallinfo();
+    const std::size_t total = static_cast<std::size_t>(_newlib_heap_size_user);
+    return total > static_cast<std::size_t>(mi.uordblks) ? total - static_cast<std::size_t>(mi.uordblks) : 0;
+#else
+    return ~static_cast<std::size_t>(0);
+#endif
+}
+
+std::unique_ptr<WMORenderer::ModelData> WMORenderer::Gl::buildCollisionModelUnchecked(pipeline::AssetManager* assets, const std::string& path, uint32_t id) {
+    auto md = std::make_unique<WMORenderer::ModelData>();
+    if (!assets || path.empty()) return md;
+    constexpr std::size_t kNeedAtStart = 60u * 1024 * 1024;   // do not begin a building with less free heap than this
+    constexpr std::size_t kStopBelow = 25u * 1024 * 1024;     // give up mid-way rather than run the heap out
+    constexpr std::size_t kMaxTriangles = 90000;              // Stormwind has 730k: a city needs its own plan, not a grid per triangle
+    if (freeHeapBytes() < kNeedAtStart) {
+        LOG_WARNING("WMO collision for ", path, " skipped: only ", freeHeapBytes() / (1024 * 1024), " MB of heap free");
+        return md;
+    }
+    const std::vector<uint8_t> data = assets->readFile(path);
+    if (data.empty()) return md;
+    pipeline::WMOModel model = pipeline::WMOLoader::load(data);
+    md->id = id;
+    md->boundingBoxMin = model.boundingBoxMin;
+    md->boundingBoxMax = model.boundingBoxMax;
+    md->wmoAmbientColor = model.ambientColor;
+    const glm::vec3 ext = model.boundingBoxMax - model.boundingBoxMin;
+    md->isLowPlatform = (ext.z < 6.0f && std::max(ext.x, ext.y) > 20.0f);
+    md->groupPortalRefs.assign(model.nGroups, {0, 0});
+    md->groups.resize(model.nGroups);
+    std::size_t tris = 0;
+    for (uint32_t gi = 0; gi < model.nGroups; ++gi) {
+        // One group at a time: parse it, keep only its collision form, let the parsed copy go.
+        for (const std::string& gp : pipeline::wmoGroupCandidates(path, gi)) {
+            const std::vector<uint8_t> gd = assets->readFile(gp);
+            if (gd.empty()) continue;
+            pipeline::WMOLoader::loadGroup(gd, model, gi);
+            break;
+        }
+        if (gi < model.groups.size()) {
+            pipeline::WMOGroup& g = model.groups[gi];
+            md->groupPortalRefs[gi] = {g.portalStart, g.portalCount};
+            fillCollisionGroup(g, md->groups[gi]);
+            tris += md->groups[gi].collisionIndices.size() / 3;
+            std::vector<pipeline::WMOVertex>().swap(g.vertices);
+            std::vector<uint16_t>().swap(g.indices);
+            std::vector<pipeline::WMOBatch>().swap(g.batches);
+            std::vector<uint8_t>().swap(g.triFlags);
+        }
+        if (tris > kMaxTriangles) {
+            LOG_WARNING("WMO collision for ", path, " skipped: more than ", kMaxTriangles, " triangles (", model.nGroups, " groups)");
+            return std::make_unique<WMORenderer::ModelData>();
+        }
+        if (freeHeapBytes() < kStopBelow) {
+            LOG_WARNING("WMO collision for ", path, " stopped at group ", gi, " of ", model.nGroups, ": ", freeHeapBytes() / (1024 * 1024),
+                        " MB of heap free");
+            return std::make_unique<WMORenderer::ModelData>();
+        }
+    }
+    for (const pipeline::WMOPortalRef& ref : model.portalRefs) {
+        WMORenderer::PortalRef pr;
+        pr.portalIndex = ref.portalIndex;
+        pr.groupIndex = ref.groupIndex;
+        pr.side = ref.side;
+        md->portalRefs.push_back(pr);
+    }
+    md->setupDone = !md->groups.empty();
+    LOG_WARNING("WMO collision built: ", path, " ", md->groups.size(), " groups, ", tris, " triangles, ", freeHeapBytes() / (1024 * 1024),
+                " MB heap free after");
+    return md;
+}
+
+static float boxDistance(const glm::vec3& p, const glm::vec3& lo, const glm::vec3& hi) {
+    const glm::vec3 d = glm::max(glm::max(lo - p, p - hi), glm::vec3(0.0f));
+    return glm::length(d);
+}
+
+void WMORenderer::glUpdateCollision(const glm::vec3& focus) {
+    if (!glReady()) return;
+    constexpr float kBuildRadius = 120.0f;   // yards from the player's position to a building's edge
+    constexpr float kDropRadius = 320.0f;
+
+    // A finished build: hand it to the collision tables and give every instance of the model its group bounds.
+    if (gl_->job.valid() && gl_->job.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        std::unique_ptr<ModelData> md;
+        try {
+            md = gl_->job.get();
+        } catch (const std::exception& e) {
+            LOG_WARNING("WMO collision job failed: ", e.what());
+        }
+        const uint32_t id = gl_->jobModel;
+        auto mit = gl_->models.find(id);
+        if (mit != gl_->models.end()) {
+            if (md && md->setupDone && !md->groups.empty()) {
+                std::size_t tris = 0;
+                for (const GroupResources& gr : md->groups) tris += gr.collisionIndices.size() / 3;
+                loadedModels[id] = std::move(*md);
+                mit->second.collision = 2;
+                for (WMOInstance& wi : instances) {
+                    if (wi.modelId != id) continue;
+                    wi.worldGroupBounds.clear();
+                    for (const GroupResources& gr : loadedModels[id].groups) {
+                        glm::vec3 gLo, gHi;
+                        worldBox(wi.modelMatrix, gr.boundingBoxMin, gr.boundingBoxMax, gLo, gHi);
+                        wi.worldGroupBounds.emplace_back(gLo - glm::vec3(0.5f), gHi + glm::vec3(0.5f));
+                    }
+                }
+                LOG_WARNING("WMO collision built for model ", id, ": ", loadedModels[id].groups.size(), " groups, ", tris, " triangles");
+            } else {
+                mit->second.collision = 0;
+                mit->second.sourcePath.clear();  // could not be built: do not retry every time
+            }
+        }
+    }
+
+    if (++gl_->collisionTick % 10 != 0) return;
+
+    // Models none of whose instances are near any more give their memory back.
+    for (auto& kv : gl_->models) {
+        Gl::Model& m = kv.second;
+        if (m.collision != 2) continue;
+        bool near = false;
+        for (const WMOInstance& wi : instances) {
+            if (wi.modelId == kv.first && boxDistance(focus, wi.worldBoundsMin, wi.worldBoundsMax) < kDropRadius) { near = true; break; }
+        }
+        if (near) continue;
+        loadedModels.erase(kv.first);
+        for (WMOInstance& wi : instances) if (wi.modelId == kv.first) wi.worldGroupBounds.clear();
+        m.collision = 0;
+        LOG_WARNING("WMO collision dropped for model ", kv.first);
+    }
+
+    // The nearest building without collision, one at a time.
+    if (gl_->job.valid()) return;
+    float best = kBuildRadius;
+    uint32_t bestModel = 0;
+    for (const WMOInstance& wi : instances) {
+        auto mit = gl_->models.find(wi.modelId);
+        if (mit == gl_->models.end() || mit->second.collision != 0 || mit->second.sourcePath.empty()) continue;
+        const float d = boxDistance(focus, wi.worldBoundsMin, wi.worldBoundsMax);
+        if (d < best) { best = d; bestModel = wi.modelId; }
+    }
+    if (bestModel == 0) return;
+    Gl::Model& m = gl_->models[bestModel];
+    m.collision = 1;
+    gl_->jobModel = bestModel;
+    gl_->job = std::async(std::launch::async, &Gl::buildCollisionModel, gl_->assets, m.sourcePath, bestModel);
+}
+
 uint32_t WMORenderer::createInstance(uint32_t modelId, const glm::vec3& position, const glm::vec3& rotation, float scale) {
     if (!glReady() || !isModelLoaded(modelId)) return 0;
     auto it = gl_->models.find(modelId);
@@ -303,24 +526,54 @@ uint32_t WMORenderer::createInstance(uint32_t modelId, const glm::vec3& position
     inst.radius = glm::length(hi - lo) * 0.5f;
     const uint32_t id = gl_->nextInstance++;
     gl_->instances.emplace(id, inst);
+    // The same instance for the upstream collision code: matrices, world and per-group bounds, spatial index.
+    WMOInstance wi;
+    wi.id = id;
+    wi.modelId = modelId;
+    wi.position = position;
+    wi.rotation = rotation;
+    wi.scale = scale;
+    wi.modelMatrix = inst.matrix;
+    wi.invModelMatrix = glm::inverse(inst.matrix);
+    wi.worldBoundsMin = lo;
+    wi.worldBoundsMax = hi;
+    auto lmIt = loadedModels.find(modelId);
+    if (lmIt != loadedModels.end()) {
+        wi.worldGroupBounds.reserve(lmIt->second.groups.size());
+        for (const GroupResources& gr : lmIt->second.groups) {
+            glm::vec3 gLo, gHi;
+            worldBox(inst.matrix, gr.boundingBoxMin, gr.boundingBoxMax, gLo, gHi);
+            wi.worldGroupBounds.emplace_back(gLo - glm::vec3(0.5f), gHi + glm::vec3(0.5f));
+        }
+    }
+    instances.push_back(wi);
+    instanceIndexById[id] = instances.size() - 1;
+    insertBounds(spatialGrid, wi.worldBoundsMin, wi.worldBoundsMax, id);
     return id;
 }
 
 bool WMORenderer::hasInstance(uint32_t instanceId) const { return gl_ && gl_->instances.count(instanceId) != 0; }
 
 void WMORenderer::removeInstance(uint32_t instanceId) {
-    if (gl_) gl_->instances.erase(instanceId);
+    removeInstances(std::vector<uint32_t>{instanceId});
 }
 
 void WMORenderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
-    if (!gl_) return;
+    if (!gl_ || instanceIds.empty()) return;
     for (uint32_t id : instanceIds) gl_->instances.erase(id);
+    // The upstream copies: drop them and rebuild the index once for the whole batch.
+    std::unordered_set<uint32_t> gone(instanceIds.begin(), instanceIds.end());
+    instances.erase(std::remove_if(instances.begin(), instances.end(), [&](const WMOInstance& w) { return gone.count(w.id) != 0; }),
+                    instances.end());
+    rebuildSpatialIndex();
 }
 
 void WMORenderer::setInstanceHidden(uint32_t instanceId, bool hidden) {
     if (!gl_) return;
     auto it = gl_->instances.find(instanceId);
     if (it != gl_->instances.end()) it->second.hidden = hidden;
+    auto idx = instanceIndexById.find(instanceId);
+    if (idx != instanceIndexById.end() && idx->second < instances.size()) instances[idx->second].hidden = hidden;
 }
 
 void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
@@ -334,6 +587,32 @@ void WMORenderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tra
     worldBox(transform, mit->second.bmin, mit->second.bmax, lo, hi);
     it->second.center = (lo + hi) * 0.5f;
     it->second.radius = glm::length(hi - lo) * 0.5f;
+    auto idx = instanceIndexById.find(instanceId);
+    if (idx != instanceIndexById.end() && idx->second < instances.size()) {
+        WMOInstance& wi = instances[idx->second];
+        const glm::vec3 oldMin = wi.worldBoundsMin, oldMax = wi.worldBoundsMax;
+        wi.modelMatrix = transform;
+        wi.invModelMatrix = glm::inverse(transform);
+        wi.worldBoundsMin = lo;
+        wi.worldBoundsMax = hi;
+        auto lm = loadedModels.find(wi.modelId);
+        if (lm != loadedModels.end()) {
+            wi.worldGroupBounds.clear();
+            for (const GroupResources& gr : lm->second.groups) {
+                glm::vec3 gLo, gHi;
+                worldBox(transform, gr.boundingBoxMin, gr.boundingBoxMax, gLo, gHi);
+                wi.worldGroupBounds.emplace_back(gLo - glm::vec3(0.5f), gHi + glm::vec3(0.5f));
+            }
+        }
+        // Only this instance moves in the grid, and not at all while it stays in its cells. Rebuilding the whole index here
+        // took ~100 ms a frame for a moving transport (the Stormwind box alone covers thousands of cells).
+        refileBounds(spatialGrid, oldMin, oldMax, lo, hi, instanceId);
+    }
+}
+
+void WMORenderer::resetQueryStats() {
+    queryTimeMs = 0.0;
+    queryCallCount = 0;
 }
 
 uint32_t WMORenderer::glInstanceCount() const { return gl_ ? static_cast<uint32_t>(gl_->instances.size()) : 0; }
@@ -474,7 +753,12 @@ void WMORenderer::debugDumpGroupsAtPosition([[maybe_unused]] float glX, [[maybe_
 const std::vector<WMORenderer::DoodadTemplate>* WMORenderer::getDoodadTemplates([[maybe_unused]] uint32_t modelId) const { return nullptr; }
 
 
-bool WMORenderer::instanceHasCollisionGeometry([[maybe_unused]] uint32_t instanceId) const { return false; }
+bool WMORenderer::instanceHasCollisionGeometry(uint32_t instanceId) const {
+    auto idx = instanceIndexById.find(instanceId);
+    if (idx == instanceIndexById.end() || idx->second >= instances.size()) return false;
+    auto model = loadedModels.find(instances[idx->second].modelId);
+    return model != loadedModels.end() && model->second.setupDone && !model->second.groups.empty();
+}
 
 
 
