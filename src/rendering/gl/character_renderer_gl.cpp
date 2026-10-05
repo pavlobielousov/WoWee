@@ -13,15 +13,20 @@
 #include "rendering/gl/gl_stats.hpp"
 #include "rendering/gl/gl_texture.hpp"
 #include "rendering/gl/shader_sources.hpp"
+#include "rendering/m2_track_sampler.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <vitaGL.h>
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <limits>
 #include <numeric>
@@ -34,16 +39,25 @@ public:
     GLuint id = 0;
 };
 
+namespace gl {
+// gl.cfg switches for telling the two ways a character is drawn apart (set by Renderer, read every frame): `noanim` draws every
+// character from the shared Stand-pose buffer, `animall` skins every character in range each frame.
+bool g_charNoAnim = false, g_charAnimAll = false;
+}  // namespace gl
+
+// The GL vertex: position, normal, first UV set.
+struct CharacterGlVertex {
+    float pos[3];
+    float normal[3];
+    float uv[2];
+};
+
 struct CharacterRenderer::Gl {
     struct Uniforms {
         GLint viewProj = -1, model = -1, uvOffset = -1, lightDir = -1, lightColor = -1, ambient = -1, eye = -1, fog = -1,
               lit = -1, texture = -1, fogColor = -1, tint = -1, params = -1;
     };
-    struct Vertex {
-        float pos[3];
-        float normal[3];
-        float uv[2];
-    };
+    using Vertex = CharacterGlVertex;
     // The vertex and index buffers of one M2 file, shared by every model id that was loaded from it (an NPC model is loaded per
     // display id: eight guards in eight skins are eight ids and one set of buffers).
     struct Buffers {
@@ -79,6 +93,22 @@ struct CharacterRenderer::Gl {
     bool ready = false;
     std::size_t gpuBytes = 0;
     int drawn = 0, shown = 0, visible = 0;
+    // Animated characters (phase B): the closest few are skinned on the CPU each frame into a ring of two vertex buffers (one
+    // being filled while the GPU still reads the other); everyone else keeps the shared Stand-pose buffer baked at load.
+    int maxAnimated = 4;
+    float animRange = 25.0f;  // yards
+    // One vertex buffer per animated slot and frame parity, always drawn from offset 0 (a shared buffer with per-instance offsets
+    // drew every instance but the first one distorted on the Vita).
+    std::vector<GLuint> slotVbo;  // [parity * maxAnimated + slot]
+    std::size_t slotVerts = 0;    // capacity of one slot buffer, in vertices
+    int parity = 0;
+    std::vector<Vertex> staging;
+    std::vector<uint32_t> slotOwner;  // instance id holding each slot (0 = free)
+    std::vector<int> slotParity;      // the parity buffer of each slot that was written last (-1 = never)
+    uint32_t frameCounter = 0;
+    long rangeCalls = 0;
+    double skinMs = 0.0, boneMs = 0.0, uploadMs = 0.0, totalMs = 0.0;
+    long skinVerts = 0, skinFrames = 0, animatedNow = 0;
     int maxDrawn = 24;       // the closest N characters are drawn, the rest are nameplates only
     float reach = 150.0f;    // yards
     GpuTexture white;
@@ -96,6 +126,133 @@ struct CharacterRenderer::Gl {
         return raw;
     }
 };
+
+
+// ---- skinning (CPU) ----
+
+// Sequence index of the Stand animation (id 0, primary variation first), -1 when the model has none.
+static int standSequence(const pipeline::M2Model& model) {
+    int first = -1;
+    for (std::size_t i = 0; i < model.sequences.size(); ++i) {
+        if (model.sequences[i].id != 0) continue;
+        if (first < 0) first = static_cast<int>(i);
+        if (model.sequences[i].variationIndex == 0) return static_cast<int>(i);
+    }
+    return first;
+}
+
+// Blend the vertices [first, first + count) over their bones (up to four, by weight) into `out` (indexed by vertex). The bone
+// matrices already hold the pivot bracket of an M2 bone, so a bind-pose position goes straight through them.
+static void skinVertices(const pipeline::M2Model& model, const std::vector<glm::mat4>& bones, CharacterGlVertex* out,
+                         uint32_t first, uint32_t count) {
+    const std::size_t nb = bones.size();
+    const uint32_t end = std::min<uint32_t>(first + count, static_cast<uint32_t>(model.vertices.size()));
+#if defined(__ARM_NEON)
+    // Everything stays in NEON registers: moving a float between the VFP and NEON units costs a Cortex-A9 about twenty cycles, and
+    // the first version did it six times a bone weight (0.8 microseconds a vertex). The weights of an M2 vertex add to 255.
+    static_assert(offsetof(pipeline::M2Vertex, position) == 0 && sizeof(glm::vec3) == 12, "M2Vertex layout");
+    const float32x4_t inv255 = vdupq_n_f32(1.0f / 255.0f);
+    for (uint32_t i = first; i < end; ++i) {
+        const pipeline::M2Vertex& v = model.vertices[i];
+        uint32_t wbits;
+        std::memcpy(&wbits, v.boneWeights, 4);
+        if (wbits == 0) {  // no bone: the bind position
+            out[i].pos[0] = v.position.x; out[i].pos[1] = v.position.y; out[i].pos[2] = v.position.z;
+            out[i].normal[0] = v.normal.x; out[i].normal[1] = v.normal.y; out[i].normal[2] = v.normal.z;
+            out[i].uv[0] = v.texCoords[0].x; out[i].uv[1] = v.texCoords[0].y;
+            continue;
+        }
+        const float32x4_t pos = vld1q_f32(&v.position.x);   // x y z and the first weight bytes (lane 3 is not used)
+        const float32x4_t nrm = vld1q_f32(&v.normal.x);     // nx ny nz and the first texture coordinate (not used)
+        const float32x2_t pxy = vget_low_f32(pos), pz = vget_high_f32(pos), nxy = vget_low_f32(nrm), nz = vget_high_f32(nrm);
+        const float32x4_t wf = vmulq_f32(vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(vcreate_u8(wbits))))), inv255);
+        const float32x2_t w01 = vget_low_f32(wf), w23 = vget_high_f32(wf);
+        float32x4_t p = vdupq_n_f32(0.0f), n = vdupq_n_f32(0.0f);
+        for (int k = 0; k < 4; ++k) {
+            const uint32_t idx = v.boneIndices[k];
+            if (v.boneWeights[k] == 0 || idx >= nb) continue;
+            const float* m = &bones[idx][0][0];
+            const float32x4_t c0 = vld1q_f32(m), c1 = vld1q_f32(m + 4), c2 = vld1q_f32(m + 8), c3 = vld1q_f32(m + 12);
+            const float32x4_t pa = vmlaq_lane_f32(vmulq_lane_f32(c0, pxy, 0), c1, pxy, 1);
+            const float32x4_t pb = vmlaq_lane_f32(c3, c2, pz, 0);
+            const float32x4_t na = vmlaq_lane_f32(vmulq_lane_f32(c0, nxy, 0), c1, nxy, 1);
+            const float32x4_t nb2 = vmulq_lane_f32(c2, nz, 0);
+            const float32x4_t ps = vaddq_f32(pa, pb), ns = vaddq_f32(na, nb2);
+            switch (k) {
+                case 0: p = vmlaq_lane_f32(p, ps, w01, 0); n = vmlaq_lane_f32(n, ns, w01, 0); break;
+                case 1: p = vmlaq_lane_f32(p, ps, w01, 1); n = vmlaq_lane_f32(n, ns, w01, 1); break;
+                case 2: p = vmlaq_lane_f32(p, ps, w23, 0); n = vmlaq_lane_f32(n, ns, w23, 0); break;
+                default: p = vmlaq_lane_f32(p, ps, w23, 1); n = vmlaq_lane_f32(n, ns, w23, 1); break;
+            }
+        }
+        // Stores: position's fourth lane lands on normal[0] and is overwritten by the next store.
+        vst1q_f32(&out[i].pos[0], p);
+        vst1_f32(&out[i].normal[0], vget_low_f32(n));
+        vst1_lane_f32(&out[i].normal[2], vget_high_f32(n), 0);
+        vst1_f32(&out[i].uv[0], vld1_f32(&v.texCoords[0].x));
+    }
+#else
+    for (uint32_t i = first; i < end; ++i) {
+        const pipeline::M2Vertex& v = model.vertices[i];
+        const int wsum = v.boneWeights[0] + v.boneWeights[1] + v.boneWeights[2] + v.boneWeights[3];
+        out[i].uv[0] = v.texCoords[0].x;
+        out[i].uv[1] = v.texCoords[0].y;
+        if (wsum <= 0) {  // no bone: the bind position
+            out[i].pos[0] = v.position.x; out[i].pos[1] = v.position.y; out[i].pos[2] = v.position.z;
+            out[i].normal[0] = v.normal.x; out[i].normal[1] = v.normal.y; out[i].normal[2] = v.normal.z;
+            continue;
+        }
+        const float norm = 1.0f / static_cast<float>(wsum);
+        glm::vec3 p(0.0f), n(0.0f);
+        for (int k = 0; k < 4; ++k) {
+            if (v.boneWeights[k] == 0 || v.boneIndices[k] >= nb) continue;
+            const float w = static_cast<float>(v.boneWeights[k]) * norm;
+            const glm::mat4& m = bones[v.boneIndices[k]];
+            p += w * glm::vec3(m[0] * v.position.x + m[1] * v.position.y + m[2] * v.position.z + m[3]);
+            n += w * glm::vec3(m[0] * v.normal.x + m[1] * v.normal.y + m[2] * v.normal.z);
+        }
+        out[i].pos[0] = p.x; out[i].pos[1] = p.y; out[i].pos[2] = p.z;
+        out[i].normal[0] = n.x; out[i].normal[1] = n.y; out[i].normal[2] = n.z;
+    }
+#endif
+}
+
+void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
+    auto mit = models.find(instance.modelId);
+    if (mit == models.end()) return;
+    const pipeline::M2Model& model = mit->second.data;
+    const std::size_t n = model.bones.size();
+    if (n == 0) return;
+    instance.boneMatrices.resize(n);
+    const auto& gsd = model.globalSequenceDurations;
+    for (std::size_t i = 0; i < n; ++i) {
+        const pipeline::M2Bone& bone = model.bones[i];
+        glm::mat4 local = getBoneTransform(bone, instance.animationTime, instance.globalSequenceTime, instance.currentSequenceIndex, gsd);
+        if (bone.keyBoneId == 4 && instance.torsoYawOverrideRad != 0.0f) {  // the lower spine
+            local = glm::translate(glm::mat4(1.0f), bone.pivot) * glm::rotate(glm::mat4(1.0f), instance.torsoYawOverrideRad, glm::vec3(0.0f, 0.0f, 1.0f)) *
+                    glm::translate(glm::mat4(1.0f), -bone.pivot) * local;
+        }
+        if (bone.parentBone >= 0 && static_cast<std::size_t>(bone.parentBone) < i) instance.boneMatrices[i] = instance.boneMatrices[bone.parentBone] * local;
+        else instance.boneMatrices[i] = local;
+    }
+}
+
+// M2 bone transform T(pivot) * T(trans) * R(rot) * S(scale) * T(-pivot), built directly (upstream's own).
+glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime, int sequenceIndex,
+                                              const std::vector<uint32_t>& globalSeqDurations) {
+    const glm::vec3 translation = m2_track::sampleVec3(bone.translation, sequenceIndex, animTime, globalSeqTime, globalSeqDurations, glm::vec3(0.0f));
+    const glm::quat rotation = m2_track::sampleQuat(bone.rotation, sequenceIndex, animTime, globalSeqTime, globalSeqDurations);
+    const glm::vec3 scale = m2_track::sampleVec3(bone.scale, sequenceIndex, animTime, globalSeqTime, globalSeqDurations, glm::vec3(1.0f));
+    const glm::mat3 R = glm::mat3_cast(rotation);
+    const glm::vec3 c0 = R[0] * scale.x, c1 = R[1] * scale.y, c2 = R[2] * scale.z;
+    const glm::vec3 t = (bone.pivot + translation) - (c0 * bone.pivot.x + c1 * bone.pivot.y + c2 * bone.pivot.z);
+    glm::mat4 m;
+    m[0] = glm::vec4(c0, 0.0f);
+    m[1] = glm::vec4(c1, 0.0f);
+    m[2] = glm::vec4(c2, 0.0f);
+    m[3] = glm::vec4(t, 1.0f);
+    return m;
+}
 
 CharacterRenderer::CharacterRenderer() = default;
 
@@ -116,6 +273,8 @@ bool CharacterRenderer::glInitialize(pipeline::AssetManager* assets) {
         const char* v = std::getenv("WOWEE_TEXTURE_MAX");
         gl_->textures.setMaxDimension(v ? std::atoi(v) : 256);
         if (const char* n = std::getenv("WOWEE_CHAR_MAX")) gl_->maxDrawn = std::clamp(std::atoi(n), 0, 200);
+        if (const char* a = std::getenv("WOWEE_CHAR_ANIM_MAX")) gl_->maxAnimated = std::clamp(std::atoi(a), 0, 32);
+        if (const char* r = std::getenv("WOWEE_CHAR_ANIM_DIST")) gl_->animRange = std::clamp(static_cast<float>(std::atof(r)), 5.0f, 100.0f);
         if (const char* r = std::getenv("WOWEE_CHAR_RANGE")) gl_->reach = std::clamp(static_cast<float>(std::atof(r)), 20.0f, 1000.0f);
     }
     for (int k = 0; k < 3; ++k) {
@@ -141,6 +300,19 @@ bool CharacterRenderer::glInitialize(pipeline::AssetManager* assets) {
         u.params = glGetUniformLocation(p, "uParams");
     }
     gl_->white.id = gl_->textures.white();
+    if (gl_->maxAnimated > 0) {
+        gl_->maxAnimated = std::min(gl_->maxAnimated, 8);
+        gl_->slotVerts = 8192;  // 256 KB a slot: the biggest humanoid has 6300 vertices
+        gl_->staging.resize(gl_->slotVerts);
+        gl_->slotVbo.resize(static_cast<std::size_t>(2 * gl_->maxAnimated));
+        gl_->slotOwner.assign(static_cast<std::size_t>(gl_->maxAnimated), 0);
+        gl_->slotParity.assign(static_cast<std::size_t>(gl_->maxAnimated), -1);
+        glGenBuffers(static_cast<GLsizei>(gl_->slotVbo.size()), gl_->slotVbo.data());
+        for (GLuint b : gl_->slotVbo) {
+            glBindBuffer(GL_ARRAY_BUFFER, b);
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(gl_->slotVerts * sizeof(Gl::Vertex)), nullptr, GL_DYNAMIC_DRAW);
+        }
+    }
     gl_->ready = true;
     LOG_WARNING("Character renderer (GL) ready: draws at most ", gl_->maxDrawn, " within ", gl_->reach, " yards");
     return true;
@@ -154,6 +326,8 @@ void CharacterRenderer::shutdown() {
             p = 0;
         }
         gl_->textures.clear();
+        if (!gl_->slotVbo.empty()) glDeleteBuffers(static_cast<GLsizei>(gl_->slotVbo.size()), gl_->slotVbo.data());
+        gl_->slotVbo.clear();
         gl_->ready = false;
     }
 }
@@ -248,36 +422,10 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
         }
     }
     const bool shared = out.buf != nullptr;
+    std::size_t maxBones = 0;
     if (!shared) {
         out.buf = std::make_shared<Gl::Buffers>();
         out.canonical = id;
-        std::vector<Gl::Vertex> verts(model.vertices.size());
-        for (std::size_t i = 0; i < verts.size(); ++i) {
-            const pipeline::M2Vertex& v = model.vertices[i];
-            verts[i] = Gl::Vertex{{v.position.x, v.position.y, v.position.z}, {v.normal.x, v.normal.y, v.normal.z},
-                                  {v.texCoords[0].x, v.texCoords[0].y}};
-        }
-        glGenBuffers(1, &out.buf->vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, out.buf->vbo);
-        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Gl::Vertex)), verts.data(), GL_STATIC_DRAW);
-        glGenBuffers(1, &out.buf->ibo);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, out.buf->ibo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(model.indices.size() * sizeof(uint16_t)), model.indices.data(),
-                     GL_STATIC_DRAW);
-        out.buf->bytes = verts.size() * sizeof(Gl::Vertex) + model.indices.size() * sizeof(uint16_t);
-        out.buf->total = &gl_->gpuBytes;
-        gl_->gpuBytes += out.buf->bytes;
-    }
-    const double uploadMs = msSince(t0);
-
-    const auto t1 = std::chrono::steady_clock::now();
-    for (const pipeline::M2Texture& tex : model.textures) {
-        out.textureIds.push_back(tex.type == 0 ? loadTexture(tex.filename) : nullptr);
-    }
-    const double textureMs = msSince(t1);
-
-    std::size_t maxBones = 0;
-    if (!shared) {
         const auto t2 = std::chrono::steady_clock::now();
         M2ModelGPU gpu;
         gpu.data = model;
@@ -298,28 +446,64 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
             if (b[x].priorityPlane != b[y].priorityPlane) return b[x].priorityPlane < b[y].priorityPlane;
             return b[x].materialLayer < b[y].materialLayer;
         });
-        // The number VITA-20's skinning decision needs: the most bones any one batch uses (a GPU palette has to hold them).
+        // The number the skinning decision needs: the most bones any one batch uses (vertex bone indices are bone indices).
         for (const pipeline::M2Batch& b : model.batches) {
             if (static_cast<std::size_t>(b.indexStart) + b.indexCount > model.indices.size()) continue;
-            std::unordered_set<uint16_t> used;
+            std::unordered_set<uint8_t> used;
             for (uint32_t i = b.indexStart; i < b.indexStart + b.indexCount; ++i) {
                 const uint16_t vi = model.indices[i];
                 if (vi >= model.vertices.size()) continue;
                 const pipeline::M2Vertex& v = model.vertices[vi];
                 for (int k = 0; k < 4; ++k) {
-                    if (v.boneWeights[k] == 0) continue;
-                    const uint16_t li = v.boneIndices[k];
-                    used.insert(li < model.boneLookupTable.size() ? model.boneLookupTable[li] : li);
+                    if (v.boneWeights[k] != 0) used.insert(v.boneIndices[k]);
                 }
             }
             maxBones = std::max(maxBones, used.size());
         }
         models[id] = std::move(gpu);
+
+        // The shared buffer holds the model in its Stand pose (frame 0 of animation 0), skinned once here: bind pose is arms out.
+        std::vector<Gl::Vertex> verts(model.vertices.size());
+        for (std::size_t i = 0; i < verts.size(); ++i) {
+            const pipeline::M2Vertex& v = model.vertices[i];
+            verts[i] = Gl::Vertex{{v.position.x, v.position.y, v.position.z}, {v.normal.x, v.normal.y, v.normal.z},
+                                  {v.texCoords[0].x, v.texCoords[0].y}};
+        }
+        bool baked = false;
+        {
+            CharacterInstance tmp;
+            tmp.modelId = id;
+            tmp.currentSequenceIndex = standSequence(model);
+            if (tmp.currentSequenceIndex >= 0 && !model.bones.empty()) {
+                calculateBoneMatrices(tmp);
+                skinVertices(model, tmp.boneMatrices, verts.data(), 0, static_cast<uint32_t>(verts.size()));
+                baked = true;
+            }
+        }
+        glGenBuffers(1, &out.buf->vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, out.buf->vbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Gl::Vertex)), verts.data(), GL_STATIC_DRAW);
+        glGenBuffers(1, &out.buf->ibo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, out.buf->ibo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(model.indices.size() * sizeof(uint16_t)), model.indices.data(),
+                     GL_STATIC_DRAW);
+        out.buf->bytes = verts.size() * sizeof(Gl::Vertex) + model.indices.size() * sizeof(uint16_t);
+        out.buf->total = &gl_->gpuBytes;
+        gl_->gpuBytes += out.buf->bytes;
         gl_->byFile[key] = id;
         LOG_WARNING("Character model ", id, " '", model.name, "': ", model.vertices.size(), " verts, ", model.indices.size() / 3, " tris, ",
                     model.batches.size(), " batches, ", model.bones.size(), " bones (at most ", maxBones, " in one batch), ",
-                    model.sequences.size(), " sequences, ", model.textures.size(), " textures; copy ", msSince(t2), " ms");
+                    model.sequences.size(), " sequences, ", model.textures.size(), " textures; stand pose ", baked ? "baked" : "missing",
+                    ", prepare ", msSince(t2), " ms");
     }
+    const double uploadMs = msSince(t0);
+
+    const auto t1 = std::chrono::steady_clock::now();
+    for (const pipeline::M2Texture& tex : model.textures) {
+        out.textureIds.push_back(tex.type == 0 ? loadTexture(tex.filename) : nullptr);
+    }
+    const double textureMs = msSince(t1);
+
     gl_->glModels.emplace(id, std::move(out));
     const double total = msSince(t0);
     if (total > 30.0 || shared) {
@@ -731,6 +915,105 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
         std::partial_sort(items.begin(), items.begin() + gl_->maxDrawn, items.end(), [](const Item& a, const Item& b) { return a.dist < b.dist; });
         items.resize(static_cast<std::size_t>(gl_->maxDrawn));
     }
+    // Which batches an instance draws (the geoset filter, as in the draw loop below): only their vertices are worth skinning.
+    auto geosetsFilter = [](const CharacterInstance& inst, const pipeline::M2Model& data) {
+        if (inst.activeGeosets.empty()) return false;
+        for (const auto& b : data.batches) {
+            if (inst.activeGeosets.count(b.submeshId)) return true;
+        }
+        return false;  // matches nothing: upstream draws everything
+    };
+    auto batchDrawn = [](const CharacterInstance& inst, bool filter, const pipeline::M2Batch& b) {
+        if (filter) return inst.activeGeosets.count(b.submeshId) != 0;
+        const uint16_t grp = b.submeshId / 100;
+        return !(grp == 17 || grp == 18 || grp == 15);
+    };
+
+    // Animation: the closest few characters are skinned on the CPU, only the vertices their drawn batches use, into a vertex buffer
+    // of their own (a slot; two buffers per slot so the one the GPU still reads is not the one written). Those beyond 6 yards are
+    // re-skinned every other frame and draw the buffer written last in between.
+    std::unordered_map<uint32_t, std::pair<int, int>> animSlot;  // instance id -> slot, parity to draw
+    if (gl_->maxAnimated > 0 && !gl_->slotVbo.empty() && !gl::g_charNoAnim) {
+        const auto s0 = std::chrono::steady_clock::now();
+        ++gl_->frameCounter;
+        std::vector<const Item*> selected;
+        {
+            std::vector<const Item*> byDistance;
+            byDistance.reserve(items.size());
+            for (const Item& it : items) byDistance.push_back(&it);
+            std::sort(byDistance.begin(), byDistance.end(), [](const Item* a, const Item* b) { return a->dist < b->dist; });
+            for (const Item* it : byDistance) {
+                if (static_cast<int>(selected.size()) >= gl_->maxAnimated || (!gl::g_charAnimAll && it->dist > gl_->animRange)) break;
+                const pipeline::M2Model& data = it->gm->data;
+                if (data.bones.empty() || data.sequences.empty() || data.vertices.size() > gl_->slotVerts) continue;
+                if (instances[it->id].currentSequenceIndex < 0) continue;
+                selected.push_back(it);
+            }
+        }
+        // Slots follow their character: free the ones whose owner is no longer among the closest, then give new ones a free slot.
+        for (std::size_t sl = 0; sl < gl_->slotOwner.size(); ++sl) {
+            if (gl_->slotOwner[sl] == 0) continue;
+            bool keep = false;
+            for (const Item* it : selected) keep = keep || it->id == gl_->slotOwner[sl];
+            if (!keep) { gl_->slotOwner[sl] = 0; gl_->slotParity[sl] = -1; }
+        }
+        long verts = 0;
+        for (const Item* it : selected) {
+            int slot = -1;
+            for (std::size_t sl = 0; sl < gl_->slotOwner.size(); ++sl) if (gl_->slotOwner[sl] == it->id) slot = static_cast<int>(sl);
+            if (slot < 0) {
+                for (std::size_t sl = 0; sl < gl_->slotOwner.size() && slot < 0; ++sl) if (gl_->slotOwner[sl] == 0) slot = static_cast<int>(sl);
+                if (slot < 0) continue;
+                gl_->slotOwner[static_cast<std::size_t>(slot)] = it->id;
+                gl_->slotParity[static_cast<std::size_t>(slot)] = -1;
+            }
+            int& lastParity = gl_->slotParity[static_cast<std::size_t>(slot)];
+            const uint32_t every = it->dist < 6.0f ? 1u : (it->dist < 15.0f ? 2u : 3u);  // frames between two skinnings
+            const bool due = lastParity < 0 || ((gl_->frameCounter + it->id) % every) == 0;
+            if (due) {
+                const pipeline::M2Model& data = it->gm->data;
+                CharacterInstance& inst = instances[it->id];
+                const auto tb = std::chrono::steady_clock::now();
+                calculateBoneMatrices(inst);
+                const auto tk = std::chrono::steady_clock::now();
+                gl_->boneMs += std::chrono::duration<double, std::milli>(tk - tb).count();
+                const uint32_t count = static_cast<uint32_t>(data.vertices.size());
+                const bool filter = geosetsFilter(inst, data);
+                std::vector<std::pair<uint32_t, uint32_t>> ranges;  // [start, end) of the vertices the drawn batches use, merged
+                for (const auto& b : data.batches) {
+                    if (!batchDrawn(inst, filter, b)) continue;
+                    const uint32_t start = b.vertexStart, end = std::min<uint32_t>(count, static_cast<uint32_t>(b.vertexStart) + b.vertexCount);
+                    if (start < end) ranges.emplace_back(start, end);
+                }
+                std::sort(ranges.begin(), ranges.end());
+                const int parity = lastParity < 0 ? 0 : lastParity ^ 1;
+                glBindBuffer(GL_ARRAY_BUFFER, gl_->slotVbo[static_cast<std::size_t>(parity * gl_->maxAnimated + slot)]);
+                // Ranges closer than 48 vertices are one: a skinned vertex costs less than a call that uploads a few.
+                std::vector<std::pair<uint32_t, uint32_t>> merged;
+                for (const auto& rg : ranges) {
+                    if (!merged.empty() && rg.first <= merged.back().second + 48) merged.back().second = std::max(merged.back().second, rg.second);
+                    else merged.push_back(rg);
+                }
+                const auto t1 = std::chrono::steady_clock::now();
+                for (const auto& rg : merged) skinVertices(data, inst.boneMatrices, gl_->staging.data(), rg.first, rg.second - rg.first);
+                const auto t2 = std::chrono::steady_clock::now();
+                for (const auto& rg : merged) {
+                    glBufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(rg.first * sizeof(CharacterGlVertex)),
+                                    static_cast<GLsizeiptr>((rg.second - rg.first) * sizeof(CharacterGlVertex)), gl_->staging.data() + rg.first);
+                    verts += rg.second - rg.first;
+                }
+                gl_->skinMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+                gl_->uploadMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t2).count();
+                gl_->rangeCalls += static_cast<long>(merged.size());
+                lastParity = parity;
+            }
+            animSlot[it->id] = {slot, lastParity};
+        }
+        gl_->totalMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count();
+        gl_->skinVerts += verts;
+        gl_->animatedNow += static_cast<long>(animSlot.size());
+        ++gl_->skinFrames;
+    }
     // Draw in model order: fewer buffer binds (a street of guards is one model).
     std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.mesh->buf < b.mesh->buf; });
 
@@ -814,6 +1097,8 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
         if (pass == 0) { glDepthMask(GL_TRUE); glDisable(GL_BLEND); }
         else { glDepthMask(GL_FALSE); glEnable(GL_BLEND); }
         const Gl::Buffers* bound = nullptr;
+        GLuint boundVbo = 0;
+        std::size_t boundBase = ~std::size_t{0};
         GLuint boundTexture = 0;
         for (const Item& it : items) {
             const CharacterInstance& inst = *it.inst;
@@ -832,6 +1117,10 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                     filter = false;
                 }
             }
+            auto ro = animSlot.find(it.id);
+            const GLuint vbo = ro == animSlot.end() ? it.mesh->buf->vbo
+                                                    : gl_->slotVbo[static_cast<std::size_t>(ro->second.second * gl_->maxAnimated + ro->second.first)];
+            const std::size_t base = 0;
             const glm::mat4 matrix = getModelMatrix(inst);
             bool matrixSet[3] = {false, false, false};
 
@@ -863,16 +1152,18 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                 if (pass == 1) kind = gl::M2Kind::Blend;
                 else if (kind == gl::M2Kind::Blend) kind = gl::M2Kind::AlphaTest;
 
-                if (bound != it.mesh->buf.get()) {
+                if (bound != it.mesh->buf.get() || boundVbo != vbo || boundBase != base) {
                     bound = it.mesh->buf.get();
-                    glBindBuffer(GL_ARRAY_BUFFER, it.mesh->buf->vbo);
+                    boundVbo = vbo;
+                    boundBase = base;
+                    glBindBuffer(GL_ARRAY_BUFFER, vbo);
                     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, it.mesh->buf->ibo);
                     glEnableVertexAttribArray(0);
                     glEnableVertexAttribArray(1);
                     glEnableVertexAttribArray(2);
-                    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Gl::Vertex), reinterpret_cast<const void*>(offsetof(Gl::Vertex, pos)));
-                    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Gl::Vertex), reinterpret_cast<const void*>(offsetof(Gl::Vertex, normal)));
-                    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Gl::Vertex), reinterpret_cast<const void*>(offsetof(Gl::Vertex, uv)));
+                    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Gl::Vertex), reinterpret_cast<const void*>(base + offsetof(Gl::Vertex, pos)));
+                    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Gl::Vertex), reinterpret_cast<const void*>(base + offsetof(Gl::Vertex, normal)));
+                    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Gl::Vertex), reinterpret_cast<const void*>(base + offsetof(Gl::Vertex, uv)));
                 }
                 const int k = static_cast<int>(kind);
                 useProgram(k);
@@ -911,7 +1202,14 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
     if (stats.frames == 0) {
         LOG_WARNING("GL memory Characters: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), ", buffers ",
                     gl_->gpuBytes / 1024, " KB, models ", gl_->glModels.size(), ", instances ", instances.size(), " (", gl_->visible,
-                    " in range, ", items.size(), " drawn)");
+                    " in range, ", items.size(), " drawn); animated ", gl_->skinFrames ? static_cast<double>(gl_->animatedNow) / gl_->skinFrames : 0.0,
+                    " a frame, animation ", gl_->skinFrames ? gl_->totalMs / gl_->skinFrames : 0.0, " ms (bones ", gl_->skinFrames ? gl_->boneMs / gl_->skinFrames : 0.0,
+                    ", skin ", gl_->skinFrames ? gl_->skinMs / gl_->skinFrames : 0.0,
+                    ", upload ", gl_->skinFrames ? gl_->uploadMs / gl_->skinFrames : 0.0, " in ", gl_->skinFrames ? static_cast<double>(gl_->rangeCalls) / gl_->skinFrames : 0.0, " calls) and ",
+                    gl_->skinFrames ? static_cast<double>(gl_->skinVerts) / gl_->skinFrames : 0.0, " vertices a frame");
+        gl_->rangeCalls = 0;
+        gl_->skinMs = gl_->boneMs = gl_->uploadMs = gl_->totalMs = 0.0;
+        gl_->skinVerts = gl_->skinFrames = gl_->animatedNow = 0;
     }
 }
 

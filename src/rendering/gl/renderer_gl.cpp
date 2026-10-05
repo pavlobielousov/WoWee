@@ -77,12 +77,14 @@
 
 namespace wowee::rendering {
 
+namespace gl { extern bool g_charNoAnim, g_charAnimAll; }
+
 namespace {
 // Live profiling switches (VITA-19): ux0:data/wowee/gl.cfg is read every 60 frames, words in it: noterrain nowmo nom2 and
 // scale=<0.2..1> (the 3D viewport as a fraction of the screen, to tell fill rate from draw-call cost). Delete the file to
 // reset. A diagnostic only; the file is not there in normal use.
 struct DebugFlags {
-    bool noTerrain = false, noWmo = false, noM2 = false, noChar = false;
+    bool noTerrain = false, noWmo = false, noM2 = false, noChar = false, charNoAnim = false, charAnimAll = false;
     float scale = 1.0f;
 };
 DebugFlags g_debug;
@@ -100,12 +102,16 @@ void pollDebugFlags() {
         f.noWmo = strstr(buf, "nowmo") != nullptr;
         f.noM2 = strstr(buf, "nom2") != nullptr;
         f.noChar = strstr(buf, "nochar") != nullptr;
+        f.charNoAnim = strstr(buf, "noanim") != nullptr;
+        f.charAnimAll = strstr(buf, "animall") != nullptr;
         if (const char* sc = strstr(buf, "scale=")) f.scale = std::clamp(static_cast<float>(atof(sc + 6)), 0.2f, 1.0f);
     }
-    if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.noChar != g_debug.noChar || f.scale != g_debug.scale) {
-        LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " nochar=", f.noChar, " scale=", f.scale);
+    if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.noChar != g_debug.noChar || f.charNoAnim != g_debug.charNoAnim || f.charAnimAll != g_debug.charAnimAll || f.scale != g_debug.scale) {
+        LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " nochar=", f.noChar, " noanim=", f.charNoAnim, " animall=", f.charAnimAll, " scale=", f.scale);
     }
     g_debug = f;
+    gl::g_charNoAnim = f.charNoAnim;
+    gl::g_charAnimAll = f.charAnimAll;
 }
 }  // namespace
 
