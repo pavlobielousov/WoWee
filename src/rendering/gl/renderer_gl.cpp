@@ -253,6 +253,13 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             m2Renderer.reset();
         }
     }
+    if (!waterRenderer) {
+        waterRenderer = std::make_unique<WaterRenderer>();
+        if (!waterRenderer->glInitialize()) {
+            LOG_ERROR("Water renderer (GL) did not start, drawing no water");
+            waterRenderer.reset();
+        }
+    }
     if (!wmoRenderer) {
         wmoRenderer = std::make_unique<WMORenderer>();
         if (!wmoRenderer->glInitialize(assetManager)) {
@@ -270,9 +277,11 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
         if (cameraController) cameraController->setTerrainManager(terrainManager.get());
         if (m2Renderer) terrainManager->setM2Renderer(m2Renderer.get());
         if (wmoRenderer) terrainManager->setWMORenderer(wmoRenderer.get());
+        if (waterRenderer) terrainManager->setWaterRenderer(waterRenderer.get());
         if (cameraController) {
             if (wmoRenderer) cameraController->setWMORenderer(wmoRenderer.get());
             if (m2Renderer) cameraController->setM2Renderer(m2Renderer.get());
+            if (waterRenderer) cameraController->setWaterRenderer(waterRenderer.get());
         }
     }
     setActiveMapName(mapName);
@@ -361,6 +370,10 @@ void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]]
     if (!g_debug.noTerrain) terrainRenderer->glRender(scene);
     if (!g_debug.noWmo && wmoRenderer && wmoRenderer->glReady()) wmoRenderer->glRender(scene);
     if (!g_debug.noM2 && m2Renderer && m2Renderer->glReady()) m2Renderer->glRender(scene);
+    if (waterRenderer && waterRenderer->glReady()) {
+        static const auto start = std::chrono::steady_clock::now();
+        waterRenderer->glRender(scene, std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count());
+    }
     if (target.active()) target.end();
 }
 

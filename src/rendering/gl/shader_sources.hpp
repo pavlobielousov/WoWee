@@ -30,4 +30,7 @@ const ProgramDef& wmoProgram(M2Kind kind);
 // Copies the off-screen scene to the screen, scaled.
 const ProgramDef& blitProgram();
 
+// Terrain and building water: flat colour, shimmer, fog.
+const ProgramDef& waterProgram();
+
 }  // namespace wowee::rendering::gl

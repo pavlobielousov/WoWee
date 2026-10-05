@@ -226,6 +226,7 @@ const std::vector<ProgramDef>& shaderManifest() {
         list.push_back(wmoProgram(M2Kind::AlphaTest));
         list.push_back(wmoProgram(M2Kind::Blend));
         list.push_back(blitProgram());
+        list.push_back(waterProgram());
         return list;
     }();
     static const std::vector<ProgramDef> withStandIns = [] {

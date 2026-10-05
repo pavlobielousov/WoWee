@@ -2,6 +2,7 @@
 // The Vita's copy: every declaration that mentions Vulkan is removed (ADR-001, VITA-52).
 #pragma once
 
+#include "rendering/gl/scene_params.hpp"
 #include <vector>
 #include <memory>
 #include <optional>
@@ -69,6 +70,12 @@ struct WaterFrameUBOData {
 
 class WaterRenderer {
 public:
+    // ---- Vita (VITA-21): the GL half, src/rendering/gl/water_renderer_gl.cpp ----
+    bool glInitialize();
+    void glRender(const gl::SceneParams& scene, float timeSeconds);
+    [[nodiscard]] bool glReady() const;
+    void rebuildGlMesh(int64_t key, int tileX, int tileY, uint32_t wmoId);
+    struct Gl;
     WaterRenderer();
     ~WaterRenderer();
 
@@ -138,6 +145,7 @@ public:
     int getSurfaceCount() const { return static_cast<int>(surfaces.size()); }
 
 private:
+    std::unique_ptr<Gl> gl_;
     void createWaterMesh(WaterSurface& surface);
     void destroyWaterMesh(WaterSurface& surface);
 
