@@ -270,7 +270,7 @@ bool CharacterRenderer::glInitialize(pipeline::AssetManager* assets) {
     gl_->textures.setAssetManager(assets);
     {
         // Character skins are 256 on a side or less; a cap keeps the odd 512 or 1024 texture from taking the GPU pools.
-        const char* v = std::getenv("WOWEE_TEXTURE_MAX");
+        const char* v = std::getenv("WOWEE_CHAR_TEXTURE_MAX");
         gl_->textures.setMaxDimension(v ? std::atoi(v) : 256);
         if (const char* n = std::getenv("WOWEE_CHAR_MAX")) gl_->maxDrawn = std::clamp(std::atoi(n), 0, 200);
         if (const char* a = std::getenv("WOWEE_CHAR_ANIM_MAX")) gl_->maxAnimated = std::clamp(std::atoi(a), 0, 32);
@@ -1200,7 +1200,7 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
     stats.end(gl_->drawn, static_cast<long>(items.size()));
     gl_->drawn = 0;
     if (stats.frames == 0) {
-        LOG_WARNING("GL memory Characters: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), ", buffers ",
+        LOG_WARNING("GL memory Characters: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), " (RGBA ", gl_->textures.rgbaBytes() / 1024, " KB in ", gl_->textures.rgbaCount(), ")", ", buffers ",
                     gl_->gpuBytes / 1024, " KB, models ", gl_->glModels.size(), ", instances ", instances.size(), " (", gl_->visible,
                     " in range, ", items.size(), " drawn); animated ", gl_->skinFrames ? static_cast<double>(gl_->animatedNow) / gl_->skinFrames : 0.0,
                     " a frame, animation ", gl_->skinFrames ? gl_->totalMs / gl_->skinFrames : 0.0, " ms (bones ", gl_->skinFrames ? gl_->boneMs / gl_->skinFrames : 0.0,

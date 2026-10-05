@@ -115,9 +115,11 @@ bool WMORenderer::glInitialize(pipeline::AssetManager* assets) {
     gl_->assets = assets;
     gl_->textures.setAssetManager(assets);
     {
-        // Doodad and building textures are capped at 256 on a side (WOWEE_TEXTURE_MAX in env.txt, 0 = keep all).
-        const char* v = std::getenv("WOWEE_TEXTURE_MAX");
-        gl_->textures.setMaxDimension(v ? std::atoi(v) : 256);
+        // Building textures are capped at 128 on a side by default (WOWEE_WMO_TEXTURE_MAX in env.txt, 0 = keep all; each halving
+        // of the cap takes three quarters of the memory of the textures above it: VITA-20 measured 128 on the device).
+        const char* v = std::getenv("WOWEE_WMO_TEXTURE_MAX");
+        if (!v) v = std::getenv("WOWEE_TEXTURE_MAX");
+        gl_->textures.setMaxDimension(v ? std::atoi(v) : 128);
     }
     for (int k = 0; k < 3; ++k) {
         gl_->program[k] = gl::linkProgram(gl::wmoProgram(static_cast<gl::M2Kind>(k)));
@@ -744,7 +746,7 @@ void WMORenderer::glRender(const gl::SceneParams& scene) {
     glDisable(GL_BLEND);
     stats.end(drawCalls, gl_->drawnGroups);
     if (stats.frames == 0) {
-        LOG_WARNING("GL memory WMO: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), ", buffers ", gl_->gpuBytes / 1024,
+        LOG_WARNING("GL memory WMO: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), " (RGBA ", gl_->textures.rgbaBytes() / 1024, " KB in ", gl_->textures.rgbaCount(), ")", ", buffers ", gl_->gpuBytes / 1024,
                     " KB, models ", gl_->models.size(), ", instances ", gl_->instances.size());
     }
 }

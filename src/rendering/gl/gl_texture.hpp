@@ -24,9 +24,12 @@ struct GlTexture {
     int height = 0;
 };
 
-/// Upload a decoded BLP. `skipMips` drops that many of the largest levels (a compressed image only; the result is never
+/// Upload a decoded BLP. A decoded RGBA image (palettised or uncompressed BLP; the block-compressed ones are cut with `skipMips`) is
+/// halved until it fits `maxDimension` (0 = as it is), stored as 16 bits a texel (RGB565 when opaque, RGBA4444 otherwise) and given a mip
+/// chain: a quarter of the memory of RGBA8 before halving (VITA-20).
+/// (Original description follows.) `skipMips` drops that many of the largest levels (a compressed image only; the result is never
 /// smaller than 4x4). Uses `repeat` wrapping (terrain and doodads tile).
-GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat = true);
+GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat = true, int maxDimension = 0);
 
 /// RGBA8 pixels, no mips, linear, clamped.
 GlTexture uploadRgba(const uint8_t* rgba, int width, int height, bool repeat = false);
@@ -52,6 +55,9 @@ public:
     GLuint white();
     [[nodiscard]] std::size_t bytes() const { return bytes_; }
     [[nodiscard]] std::size_t count() const { return entries_.size(); }
+    /// How much of bytes() is decoded RGBA8 (palettised or uncompressed BLPs: the size cap does not touch them) and in how many textures.
+    [[nodiscard]] std::size_t rgbaBytes() const { return rgbaBytes_; }
+    [[nodiscard]] std::size_t rgbaCount() const { return rgbaCount_; }
     void clear();
 
 private:
@@ -62,6 +68,7 @@ private:
     std::unordered_map<std::string, GlTexture> entries_;
     GlTexture white_;
     std::size_t bytes_ = 0;
+    std::size_t rgbaBytes_ = 0, rgbaCount_ = 0;
 };
 
 }  // namespace wowee::rendering::gl

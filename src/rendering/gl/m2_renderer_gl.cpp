@@ -486,7 +486,7 @@ void M2Renderer::glRender(const gl::SceneParams& scene) {
     glDisable(GL_BLEND);
     stats.end(gl_->drawn, static_cast<long>(items.size()));
     if (stats.frames == 0) {
-        LOG_WARNING("GL memory M2: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), ", buffers ", gl_->gpuBytes / 1024,
+        LOG_WARNING("GL memory M2: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), " (RGBA ", gl_->textures.rgbaBytes() / 1024, " KB in ", gl_->textures.rgbaCount(), ")", ", buffers ", gl_->gpuBytes / 1024,
                     " KB, models ", gl_->models.size(), ", instances ", gl_->instances.size());
     }
 }
