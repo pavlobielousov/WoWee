@@ -175,6 +175,11 @@ bool TerrainManager::initialize(pipeline::AssetManager* assets, TerrainRenderer*
     // Keep this lower so decompressed MPQ file cache can stay very aggressive.
     auto& memMonitor = core::MemoryMonitor::getInstance();
     tileCacheBudgetBytes_ = memMonitor.getRecommendedCacheBudget() / 4;
+#ifdef __vita__
+    // Parsed tiles kept for a quick reload are heap the Vita does not have (about 36 MB of a 288 MB heap, retained after the
+    // tile was uploaded); a tile that comes back is read from the card again.
+    tileCacheBudgetBytes_ = 4ull * 1024 * 1024;
+#endif
     LOG_INFO("Terrain tile cache budget: ", tileCacheBudgetBytes_ / (1024 * 1024), " MB (dynamic)");
 
     // Start background worker pool (dynamic: scales with available cores)
@@ -736,6 +741,15 @@ std::shared_ptr<PendingTile> TerrainManager::prepareTile(int x, int y) {
                 if (wmoData.empty()) continue;
 
                 wmoModel = pipeline::WMOLoader::load(wmoData);
+#ifdef __vita__
+                // A city-sized model (Stormwind: 286 groups, 727,741 triangles) is ~100 MB parsed, 43+ MB on the GPU and 20 s of
+                // loading for the first tile alone, in a game that has 288 MB of heap and a full set of GPU pools. Skipped until
+                // buildings get a plan of their own (VITA-19).
+                if (wmoModel.nGroups > 64) {
+                    LOG_WARNING("WMO skipped on the Vita (", wmoModel.nGroups, " groups): ", wmoPath);
+                    wmoModel.nGroups = 0;
+                }
+#endif
                 if (wmoModel.nGroups > 0) {
                     for (uint32_t gi = 0; gi < wmoModel.nGroups; gi++) {
                         for (const std::string& groupPath :

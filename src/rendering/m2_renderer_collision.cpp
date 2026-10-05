@@ -553,7 +553,16 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
                 tl_m2_collisionTriScratch);
 
             constexpr float PLAYER_HEIGHT = 2.0f;
+#ifdef __vita__
+            // The upstream push (0.015 yards a step, 0.02 in total per instance) is a nudge: at walking speed a prop with
+            // authored collision only slowed the player (measured on the Vita: a point walked into a fence ended 0.05 yards
+            // from where it was heading). Resolve the overlap instead, up to the player's radius.
+            constexpr float MAX_TOTAL_PUSH = 0.6f;
+            constexpr float MAX_STEP_PUSH = 0.30f;
+#else
             constexpr float MAX_TOTAL_PUSH = 0.02f; // Cap total push per instance
+            constexpr float MAX_STEP_PUSH = 0.015f;
+#endif
             bool pushed = false;
             float totalPushX = 0.0f, totalPushY = 0.0f;
 
@@ -584,7 +593,11 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
                 if (distXY < localRadius && distXY > 1e-4f) {
                     // Gentle push - very small fraction of penetration
                     float penetration = localRadius - distXY;
-                    float pushDist = std::clamp(penetration * 0.08f, 0.001f, 0.015f);
+#ifdef __vita__
+                    float pushDist = std::clamp(penetration, 0.001f, MAX_STEP_PUSH);
+#else
+                    float pushDist = std::clamp(penetration * 0.08f, 0.001f, MAX_STEP_PUSH);
+#endif
                     float dx = (diff.x / distXY) * pushDist;
                     float dy = (diff.y / distXY) * pushDist;
                     localPos.x += dx;
@@ -597,7 +610,7 @@ bool M2Renderer::checkCollision(const glm::vec3& from, const glm::vec3& to,
                     glm::vec3 n = glm::cross(v1 - v0, v2 - v0);
                     float nxyLen = std::sqrt(n.x * n.x + n.y * n.y);
                     if (nxyLen > 1e-4f) {
-                        float pushDist = std::min(localRadius, 0.015f);
+                        float pushDist = std::min(localRadius, MAX_STEP_PUSH);
                         float dx = (n.x / nxyLen) * pushDist;
                         float dy = (n.y / nxyLen) * pushDist;
                         localPos.x += dx;

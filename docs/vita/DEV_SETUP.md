@@ -762,3 +762,23 @@ Goldshire church, camera still, measured on the real Vita with `WOWEE_LOG_LEVEL=
 - Did not help: bigger sceGxm parameter/VDM/vertex/fragment buffers (`WOWEE_GXM_*` knobs, no change in fps, and they took 16 MB of video memory).
 - **GPU memory is full** in the Goldshire area: vitaGL's pools (video 96 MB, RAM 25, physically contiguous 26) read 0 MB free after the third tile. Terrain holds 53 MB (the alpha maps are RGBA8, 4.2 MB a tile), buildings 43 MB of buffers and 29 MB of textures, doodads 5 MB. Not yet shown to cost frame time, but there is no headroom for water, characters or more tiles. To do: RGBA4444 alpha maps, packed vertices, texture mip skipping, drop far tiles' buffers.
 - The link can fail with "Cannot allocate N bytes for SCE data" after code growth; the padding is now 56 KB (section 17).
+
+## 30. Building collision (VITA-57)
+
+The upstream collision code (`wmo_renderer_collision.cpp`) reads the shadow class's `loadedModels` / `instances` / `spatialGrid`; the GL renderer fills them (`wmo_renderer_gl.cpp`), so floors, walls and stairs of buildings work. Verified on the device: stopped by the church wall, walking inside it. M2 props (trees, fences) are not solid yet.
+
+- **Memory decides the design.** Building the collision grids for every loaded building took the heap to 294 of 288 MB (a 25-second-old game). Collision is therefore built on a worker thread only for the buildings whose bounding box is within 120 yards of the player, one at a time, and dropped when no instance of the model is within 320 yards (`glUpdateCollision`). It re-reads and parses the WMO from the card (about a second) and keeps one group's raw data at a time. It refuses to start below 60 MB of free heap and stops below 25 MB.
+- **Skip giant models.** `STORMWIND.WMO` is one model with 286 groups and 727,741 triangles; its grid took the last of the heap, and its box (a sphere test said "near") covers a whole district. Models above 90,000 triangles get no collision on the Vita for now.
+- **A moving transport must not rebuild the index.** `setInstanceTransform` first called `rebuildSpatialIndex()`; for a boat or an elevator that is every frame, and with the Stormwind box in thousands of cells it cost 108 ms a frame (7 fps, all inside `gameHandler->update`). It uses `refileBounds` now. The same trap exists for any per-frame transform.
+- The terrain tile cache (parsed tiles kept for reloading) is 4 MB on the Vita instead of ~36 MB.
+- The log shows `Collision cost per frame` (camera controller and WMO queries: 0.1 ms and 0.05 ms in 2 calls) and `WMO collision built: <path> N groups, N triangles`.
+- Result at the church: 50-56 fps, heap peak 236 MB.
+
+### 30.1 Prop (M2) collision and the player (VITA-57 part 2)
+
+Props collide: fences, posts, tree trunks, barrels, crates (verified on the device).
+
+- **The camera was a free camera.** The controller is attached to a player through `setFollowTarget`, which the desktop does when the character model spawns. The Vita has no character renderer, so nothing ever attached it, and the controller ran in its free-walk mode: that mode asks for walls only (`sweepAgainstWalls(..., includeDoodads=false)`), so props were skipped, and `Renderer::getCharacterPosition()` never moved, so the position sent to the server never changed either. `Renderer::update` now attaches a position-only character (feet 1.2 yards under the camera) once the first terrain tile is loaded and zooms in to first person. Log line: `Camera attached to a position-only character`. Found with a counter at the sweep (`skipped(noDoodads) 600 of 600`); a probe that calls `checkCollision` directly looked fine, which is why that was not enough.
+- **Mirror only what can block.** The M2 collision tables hold the models (classification flags from `classifyM2Model`, the authored collision mesh) and the instances whose model is not clutter, effect, trap or no-block: 2400 of 9000 instances.
+- **Upstream pushes props out by 0.015 yards a step** (0.02 in total per instance): a nudge that slows a walker down. On the Vita the push resolves the overlap (up to 0.30 a step, 0.6 per instance), a gated edit in `m2_renderer_collision.cpp`.
+- **Stormwind is skipped on the Vita** (`terrain_manager.cpp`, models over 64 groups): parsed it was ~100 MB of heap and 20 s on the first tile, plus 43 MB of GPU buffers. Heap peak went from 275 MB (out of memory) to 200 MB.
