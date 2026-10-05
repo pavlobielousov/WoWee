@@ -82,7 +82,7 @@ namespace {
 // scale=<0.2..1> (the 3D viewport as a fraction of the screen, to tell fill rate from draw-call cost). Delete the file to
 // reset. A diagnostic only; the file is not there in normal use.
 struct DebugFlags {
-    bool noTerrain = false, noWmo = false, noM2 = false;
+    bool noTerrain = false, noWmo = false, noM2 = false, noChar = false;
     float scale = 1.0f;
 };
 DebugFlags g_debug;
@@ -99,10 +99,11 @@ void pollDebugFlags() {
         f.noTerrain = strstr(buf, "noterrain") != nullptr;
         f.noWmo = strstr(buf, "nowmo") != nullptr;
         f.noM2 = strstr(buf, "nom2") != nullptr;
+        f.noChar = strstr(buf, "nochar") != nullptr;
         if (const char* sc = strstr(buf, "scale=")) f.scale = std::clamp(static_cast<float>(atof(sc + 6)), 0.2f, 1.0f);
     }
-    if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.scale != g_debug.scale) {
-        LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " scale=", f.scale);
+    if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.noChar != g_debug.noChar || f.scale != g_debug.scale) {
+        LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " nochar=", f.noChar, " scale=", f.scale);
     }
     g_debug = f;
 }
@@ -267,6 +268,13 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             wmoRenderer.reset();
         }
     }
+    if (!characterRenderer) {
+        characterRenderer = std::make_unique<CharacterRenderer>();
+        if (!characterRenderer->glInitialize(assetManager)) {
+            LOG_ERROR("Character renderer (GL) did not start, drawing no characters");
+            characterRenderer.reset();
+        }
+    }
     if (!terrainManager) {
         terrainManager = std::make_unique<TerrainManager>();
         if (!terrainManager->initialize(assetManager, terrainRenderer.get())) {
@@ -370,6 +378,7 @@ void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]]
     if (!g_debug.noTerrain) terrainRenderer->glRender(scene);
     if (!g_debug.noWmo && wmoRenderer && wmoRenderer->glReady()) wmoRenderer->glRender(scene);
     if (!g_debug.noM2 && m2Renderer && m2Renderer->glReady()) m2Renderer->glRender(scene);
+    if (!g_debug.noChar && characterRenderer && characterRenderer->glReady()) characterRenderer->glRender(scene);
     if (waterRenderer && waterRenderer->glReady()) {
         static const auto start = std::chrono::steady_clock::now();
         waterRenderer->glRender(scene, std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count());
@@ -472,6 +481,7 @@ void Renderer::update(float deltaTime) {
             frames = 0;
         }
     }
+    if (characterRenderer && characterRenderer->glReady() && camera) characterRenderer->update(deltaTime, camera->getPosition());
     if (terrainManager && camera) terrainManager->update(*camera, deltaTime);
 }
 

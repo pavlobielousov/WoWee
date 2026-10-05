@@ -377,6 +377,13 @@ bool EntitySpawner::tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t inst
     if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_ || !gameHandler_) return false;
     auto* charRenderer = renderer_->getCharacterRenderer();
     if (!charRenderer) return false;
+#ifdef __vita__
+    // The Vita draws no weapons yet (VITA-20 phase D). Without this the function read each weapon model and its textures from
+    // the card on the main thread (0.7 to 2.3 s a creature, measured) and then the renderer refused the attach.
+    (void)guid;
+    (void)instanceId;
+    return false;
+#endif
 
     auto entity = gameHandler_->getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != game::ObjectType::UNIT) return false;

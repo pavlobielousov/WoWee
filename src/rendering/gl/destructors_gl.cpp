@@ -28,7 +28,6 @@ namespace wowee::rendering {
 
 AnimationController::~AnimationController() = default;
 Celestial::~Celestial() = default;
-CharacterRenderer::~CharacterRenderer() = default;
 ChargeEffect::~ChargeEffect() = default;
 Clouds::~Clouds() = default;
 FootprintRenderer::~FootprintRenderer() = default;
