@@ -761,7 +761,7 @@ Goldshire church, camera still, measured on the real Vita with `WOWEE_LOG_LEVEL=
 - **WoWee turns the camera round by itself after 2 idle minutes** (`idleOrbit`, re-applied from the saved settings by the game screen): it moves the picture under a test. The Vita renderer forces it off each frame.
 - Did not help: bigger sceGxm parameter/VDM/vertex/fragment buffers (`WOWEE_GXM_*` knobs, no change in fps, and they took 16 MB of video memory).
 - **GPU memory is full** in the Goldshire area: vitaGL's pools (video 96 MB, RAM 25, physically contiguous 26) read 0 MB free after the third tile. Terrain holds 53 MB (the alpha maps are RGBA8, 4.2 MB a tile), buildings 43 MB of buffers and 29 MB of textures, doodads 5 MB. Not yet shown to cost frame time, but there is no headroom for water, characters or more tiles. To do: RGBA4444 alpha maps, packed vertices, texture mip skipping, drop far tiles' buffers.
-- The link can fail with "Cannot allocate N bytes for SCE data" after code growth; the padding is now 56 KB (section 17).
+- The link can fail with "Cannot allocate N bytes for SCE data" after code growth; the padding is now 56 KB (section 23).
 
 ## 30. Building collision (VITA-57)
 
