@@ -432,6 +432,12 @@ private:
     // Current tile (where camera is)
     TileCoord currentTile = {.x = -1, .y = -1};
     TileCoord lastStreamTile = {.x = -1, .y = -1};
+#ifdef __vita__
+    // VITA-20: a tile is only worth its memory (about 4 MB of GPU buffers and more of heap) while some of it can be seen: the
+    // renderer's fog hides everything beyond 95% of the view distance. The camera position streamTiles() last saw, and the test.
+    glm::vec3 vitaCameraPos_{0.0f};
+    [[nodiscard]] bool vitaTileOutOfReach(const TileCoord& coord, float extraYards) const;
+#endif
 
     // Streaming parameters
     bool streamingEnabled = true;

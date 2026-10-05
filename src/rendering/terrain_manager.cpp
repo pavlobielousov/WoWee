@@ -272,6 +272,9 @@ void TerrainManager::update(const Camera& camera, float deltaTime) {
     // Get current tile from camera position.
     glm::vec3 camPos = camera.getPosition();
     TileCoord newTile = worldToTile(camPos.x, camPos.y);
+#ifdef __vita__
+    vitaCameraPos_ = camPos;
+#endif
 
     // Check if we've moved to a different tile
     if (newTile.x != currentTile.x || newTile.y != currentTile.y) {
@@ -2544,6 +2547,25 @@ std::optional<std::string> TerrainManager::getDominantTextureAt(float glX, float
     return tile->terrain.textures[texId];
 }
 
+#ifdef __vita__
+// True when no part of the tile is within reach of the camera: the fog end (95% of the view distance, WOWEE_VIEW_DISTANCE like the
+// renderer's, default 500 yards) plus a chunk, plus `extraYards` of hysteresis for the unload test.
+bool TerrainManager::vitaTileOutOfReach(const TileCoord& coord, float extraYards) const {
+    static const float kReach = [] {
+        const char* v = std::getenv("WOWEE_VIEW_DISTANCE");
+        const float d = std::clamp(v ? static_cast<float>(std::atof(v)) : 500.0f, 200.0f, 2400.0f);
+        return d * 0.95f + 40.0f;
+    }();
+    if (currentTile.x < 0) return false;  // no camera yet
+    float minX, minY, maxX, maxY;
+    getTileBounds(coord, minX, minY, maxX, maxY);
+    const float dx = std::max({minX - vitaCameraPos_.x, 0.0f, vitaCameraPos_.x - maxX});
+    const float dy = std::max({minY - vitaCameraPos_.y, 0.0f, vitaCameraPos_.y - maxY});
+    const float reach = kReach + extraYards;
+    return dx * dx + dy * dy > reach * reach;
+}
+#endif
+
 void TerrainManager::streamTiles() {
     auto shouldSkipMissingAdt = [this](const TileCoord& coord) -> bool {
         if (!assetManager) return false;
@@ -2594,6 +2616,9 @@ void TerrainManager::streamTiles() {
                 if (pendingTiles.find(coord) != pendingTiles.end()) continue;
                 if (failedTiles.find(coord) != failedTiles.end()) continue;
                 if (shouldSkipMissingAdt(coord)) continue;
+#ifdef __vita__
+                if (vitaTileOutOfReach(coord, 0.0f)) continue;  // all fog: not worth the memory (the next pass looks again)
+#endif
 
                 newTiles.push_back({.coord = coord, .distSq = dx*dx + dy*dy});
                 pendingTiles[coord] = true;
@@ -2626,6 +2651,14 @@ void TerrainManager::streamTiles() {
         int dx = coord.x - currentTile.x;
         int dy = coord.y - currentTile.y;
 
+#ifdef __vita__
+        // Out of reach by 150 yards more than a tile needs to load (hysteresis, so a tile at the edge does not flicker): unload it.
+        if (!alreadyQueued.count(coord) && !(coord.x == currentTile.x && coord.y == currentTile.y) && vitaTileOutOfReach(coord, 150.0f)) {
+            pendingUnloadQueue_.push_back(coord);
+            queuedNow++;
+            continue;
+        }
+#endif
         // Circular pattern: unload beyond radius (Euclidean distance)
         if (dx*dx + dy*dy > unloadRadius*unloadRadius && !alreadyQueued.count(coord)) {
             pendingUnloadQueue_.push_back(coord);
