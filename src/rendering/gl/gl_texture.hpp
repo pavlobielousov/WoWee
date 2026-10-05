@@ -31,6 +31,10 @@ GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat =
 /// RGBA8 pixels, no mips, linear, clamped.
 GlTexture uploadRgba(const uint8_t* rgba, int width, int height, bool repeat = false);
 
+/// The same RGBA8 pixels stored as 4 bits a channel (2 bytes a texel instead of 4): for masks that are smooth and already
+/// coarse, such as the terrain's blend maps (VITA-23).
+GlTexture uploadRgba4444(const uint8_t* rgba, int width, int height, bool repeat = false);
+
 void deleteTexture(GlTexture& texture);
 
 /// Textures by path. A path that fails to load is remembered (white is returned) so it is not retried every chunk.
@@ -38,6 +42,9 @@ class TextureCache {
 public:
     void setAssetManager(pipeline::AssetManager* assets) { assets_ = assets; }
     void setSkipMips(int n) { skipMips_ = n; }
+    /// Drops the largest mip levels of any block-compressed texture bigger than this (0 = keep all): a 960x544 screen cannot
+    /// show a 1024 texture on a doodad, and each level skipped is a quarter of the memory (VITA-23).
+    void setMaxDimension(int n) { maxDimension_ = n; }
     /// The GL texture for a BLP path, loading it on first use. Never 0: a missing file gives the white texture.
     GLuint get(const std::string& path);
     /// A texture decoded elsewhere (a worker thread): keep it under `path` unless one is already cached.
@@ -50,6 +57,8 @@ public:
 private:
     pipeline::AssetManager* assets_ = nullptr;
     int skipMips_ = 0;
+    int maxDimension_ = 0;
+    [[nodiscard]] int skipFor(const pipeline::BLPImage& image) const;
     std::unordered_map<std::string, GlTexture> entries_;
     GlTexture white_;
     std::size_t bytes_ = 0;

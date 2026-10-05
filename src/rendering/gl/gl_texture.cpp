@@ -104,6 +104,29 @@ GlTexture uploadRgba(const uint8_t* rgba, int width, int height, bool repeat) {
     return out;
 }
 
+GlTexture uploadRgba4444(const uint8_t* rgba, int width, int height, bool repeat) {
+    GlTexture out;
+    if (!rgba || width <= 0 || height <= 0) return out;
+    std::vector<uint16_t> packed(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+    auto nibble = [](uint8_t v) { return static_cast<uint16_t>((v * 15 + 127) / 255); };
+    for (std::size_t i = 0; i < packed.size(); ++i) {
+        packed[i] = static_cast<uint16_t>((nibble(rgba[i * 4]) << 12) | (nibble(rgba[i * 4 + 1]) << 8) |
+                                          (nibble(rgba[i * 4 + 2]) << 4) | nibble(rgba[i * 4 + 3]));
+    }
+    glGenTextures(1, &out.id);
+    glBindTexture(GL_TEXTURE_2D, out.id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4, packed.data());
+    const GLint wrap = repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    out.width = width;
+    out.height = height;
+    out.bytes = packed.size() * 2;
+    return out;
+}
+
 void deleteTexture(GlTexture& texture) {
     if (texture.id != 0) glDeleteTextures(1, &texture.id);
     texture = GlTexture{};
@@ -118,13 +141,22 @@ GLuint TextureCache::white() {
     return white_.id;
 }
 
+int TextureCache::skipFor(const pipeline::BLPImage& image) const {
+    int skip = skipMips_;
+    if (maxDimension_ > 0 && image.isBlockCompressed()) {
+        const int biggest = std::max(image.width, image.height);
+        while ((biggest >> skip) > maxDimension_ && skip + 1 < static_cast<int>(image.mipmaps.size())) ++skip;
+    }
+    return skip;
+}
+
 GLuint TextureCache::get(const std::string& path) {
     auto it = entries_.find(path);
     if (it != entries_.end()) return it->second.id != 0 ? it->second.id : white();
     GlTexture tex;
     if (assets_) {
         const pipeline::BLPImage image = assets_->loadTexture(path, /*keepCompressed=*/true);
-        tex = uploadBlp(image, skipMips_);
+        tex = uploadBlp(image, skipFor(image));
         if (tex.id == 0) LOG_WARNING("Texture ", path, ": could not be loaded, drawing white");
     }
     bytes_ += tex.bytes;
@@ -134,7 +166,7 @@ GLuint TextureCache::get(const std::string& path) {
 
 void TextureCache::adopt(const std::string& path, const pipeline::BLPImage& image) {
     if (entries_.count(path)) return;
-    GlTexture tex = uploadBlp(image, skipMips_);
+    GlTexture tex = uploadBlp(image, skipFor(image));
     bytes_ += tex.bytes;
     entries_.emplace(path, tex);
 }

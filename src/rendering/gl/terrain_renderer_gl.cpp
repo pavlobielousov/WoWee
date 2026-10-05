@@ -18,6 +18,7 @@
 #include <vitaGL.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <malloc.h>
@@ -185,7 +186,10 @@ GLuint packAlpha(const pipeline::ChunkMesh& chunk, std::size_t layers) {
         const std::vector<uint8_t>& a = chunk.layers[li].alphaData;
         for (std::size_t i = 0; i < 64 * 64; ++i) rgba[i * 4 + (li - 1)] = i < a.size() ? a[i] : 255;
     }
-    gl::GlTexture tex = gl::uploadRgba(rgba.data(), 64, 64, false);
+    // Four bits a channel: sixteen steps of blend between two ground textures, at half the memory (WotLK stores eight, but the
+    // GPU pools were full around Goldshire; WOWEE_ALPHA8=1 in env.txt keeps eight).
+    static const bool alpha8 = std::getenv("WOWEE_ALPHA8") != nullptr;
+    gl::GlTexture tex = alpha8 ? gl::uploadRgba(rgba.data(), 64, 64, false) : gl::uploadRgba4444(rgba.data(), 64, 64, false);
     return tex.id;
 }
 
@@ -269,7 +273,10 @@ bool TerrainRenderer::loadTerrainIncremental(const pipeline::TerrainMesh& mesh, 
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(b.indices.size() * sizeof(uint16_t)), b.indices.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    tile.bytes = b.vertices.size() * sizeof(GlVertex) + b.indices.size() * sizeof(uint16_t) + tile.chunks.size() * 64 * 64 * 4;
+    std::size_t alphaTextures = 0;
+    for (const Gl::ChunkRecord& c : tile.chunks) if (c.alpha) ++alphaTextures;
+    static const bool alpha8Bytes = std::getenv("WOWEE_ALPHA8") != nullptr;
+    tile.bytes = b.vertices.size() * sizeof(GlVertex) + b.indices.size() * sizeof(uint16_t) + alphaTextures * 64 * 64 * (alpha8Bytes ? 4 : 2);
     gl_->gpuBytes += tile.bytes;
     const struct mallinfo heap = mallinfo();
     LOG_WARNING("Terrain tile [", tileX, ",", tileY, "] uploaded (heap in use ", static_cast<unsigned>(heap.uordblks) / (1024 * 1024),

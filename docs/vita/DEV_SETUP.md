@@ -782,3 +782,19 @@ Props collide: fences, posts, tree trunks, barrels, crates (verified on the devi
 - **Mirror only what can block.** The M2 collision tables hold the models (classification flags from `classifyM2Model`, the authored collision mesh) and the instances whose model is not clutter, effect, trap or no-block: 2400 of 9000 instances.
 - **Upstream pushes props out by 0.015 yards a step** (0.02 in total per instance): a nudge that slows a walker down. On the Vita the push resolves the overlap (up to 0.30 a step, 0.6 per instance), a gated edit in `m2_renderer_collision.cpp`.
 - **Stormwind is skipped on the Vita** (`terrain_manager.cpp`, models over 64 groups): parsed it was ~100 MB of heap and 20 s on the first tile, plus 43 MB of GPU buffers. Heap peak went from 275 MB (out of memory) to 200 MB.
+
+## 31. GPU memory (VITA-23)
+
+vitaGL's pools (video 96 MB, RAM 25, physically contiguous 26) read `vram 0/96 ram 0/25 phycont 0/26` free around Goldshire, all three full, in the log line `vitaGL memory (free/total MB)`. Measured on the device, before and after:
+
+| | before | after |
+|---|---|---|
+| terrain buffers + blend maps (9 tiles) | 53 MB | 32.5 MB |
+| buildings, buffers | 43 MB (with Stormwind) | 12 MB (Stormwind skipped, DEV_SETUP 30.1) |
+| buildings, textures | 28.9 MB | 28.6 MB |
+| doodads, textures + buffers | 4.4 + 0.8 MB | same |
+| pools free (video / RAM / contiguous) | 0 / 0 / 0 | 2 / 9 / 4 |
+
+- **Blend maps at 4 bits a channel** (`uploadRgba4444`, 2 bytes a texel): 20 MB saved, no visible difference on the device (sixteen steps of blend). `WOWEE_ALPHA8=1` in env.txt keeps eight bits to compare.
+- **A texture size cap does nothing here** (`WOWEE_TEXTURE_MAX`, default 256 for buildings and doodads, 0 = keep all): WoW's building textures are already 256 and smaller, 330 of them are 28 MB. Left in as a knob.
+- Video memory is still full; the spill goes to RAM and contiguous RAM, which have about 13 MB free between them. That is the headroom for water and characters; more needs unloading what is behind the player (buffers and textures of far buildings) or packed vertices (terrain 40 -> 28 bytes a vertex would save about 4 MB).

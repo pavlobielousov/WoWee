@@ -18,6 +18,7 @@
 #include <vitaGL.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -86,6 +87,11 @@ bool M2Renderer::glInitialize(pipeline::AssetManager* assets) {
     gl_->assets = assets;
     assetManager = assets;
     gl_->textures.setAssetManager(assets);
+    {
+        // Doodad and building textures are capped at 256 on a side (WOWEE_TEXTURE_MAX in env.txt, 0 = keep all).
+        const char* v = std::getenv("WOWEE_TEXTURE_MAX");
+        gl_->textures.setMaxDimension(v ? std::atoi(v) : 256);
+    }
     for (int k = 0; k < 3; ++k) {
         gl_->program[k] = gl::linkProgram(gl::m2Program(static_cast<gl::M2Kind>(k)));
         if (gl_->program[k] == 0) {

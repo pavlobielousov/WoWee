@@ -17,6 +17,7 @@
 #include <vitaGL.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <malloc.h>
 #include <exception>
@@ -113,6 +114,11 @@ bool WMORenderer::glInitialize(pipeline::AssetManager* assets) {
     gl_ = std::make_unique<Gl>();
     gl_->assets = assets;
     gl_->textures.setAssetManager(assets);
+    {
+        // Doodad and building textures are capped at 256 on a side (WOWEE_TEXTURE_MAX in env.txt, 0 = keep all).
+        const char* v = std::getenv("WOWEE_TEXTURE_MAX");
+        gl_->textures.setMaxDimension(v ? std::atoi(v) : 256);
+    }
     for (int k = 0; k < 3; ++k) {
         gl_->program[k] = gl::linkProgram(gl::wmoProgram(static_cast<gl::M2Kind>(k)));
         if (gl_->program[k] == 0) {
