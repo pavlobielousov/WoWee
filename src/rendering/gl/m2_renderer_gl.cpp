@@ -3,6 +3,8 @@
 // (cmake/vita/shadow/rendering/m2_renderer.hpp) or, where upstream's header is Vulkan-free, by upstream's own.
 #include "rendering/m2_renderer.hpp"
 
+#include "../m2_renderer_internal.h"
+#include "rendering/m2_model_classifier.hpp"
 #include "rendering/gl/gl_program.hpp"
 #include "rendering/gl/gl_stats.hpp"
 #include "rendering/gl/gl_texture.hpp"
@@ -17,7 +19,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace wowee::rendering {
 
@@ -132,6 +136,10 @@ void M2Renderer::clear() {
     gl_->models.clear();
     gl_->instances.clear();
     gl_->gpuBytes = 0;
+    models.clear();
+    instances.clear();
+    instanceIndexById.clear();
+    spatialGrid.clear();
 }
 
 bool M2Renderer::hasModel(uint32_t modelId) const { return gl_ && gl_->models.count(modelId) != 0; }
@@ -190,6 +198,39 @@ bool M2Renderer::loadModel(const pipeline::M2Model& model, uint32_t modelId) {
         out.batches.push_back(batch);
     }
     gl_->gpuBytes += out.bytes;
+    {
+        // The upstream collision code reads `models` (M2ModelGPU): the classification of the model and its authored
+        // collision mesh, as M2Renderer::loadModel fills them (m2_renderer.cpp).
+        glm::vec3 tightMin(std::numeric_limits<float>::max()), tightMax(-std::numeric_limits<float>::max());
+        for (const pipeline::M2Vertex& v : model.vertices) {
+            if (!std::isfinite(v.position.x) || !std::isfinite(v.position.y) || !std::isfinite(v.position.z)) continue;
+            tightMin = glm::min(tightMin, v.position);
+            tightMax = glm::max(tightMax, v.position);
+        }
+        if (tightMin.x > tightMax.x) { tightMin = glm::vec3(-1.0f); tightMax = glm::vec3(1.0f); }
+        const auto cls = classifyM2Model(model.name, tightMin, tightMax, model.vertices.size(), model.particleEmitters.size());
+        M2ModelGPU g;
+        g.name = model.name;
+        g.isInvisibleTrap = cls.isInvisibleTrap;
+        g.collisionSteppedFountain = cls.collisionSteppedFountain;
+        g.collisionSteppedLowPlatform = cls.collisionSteppedLowPlatform;
+        g.collisionBridge = cls.collisionBridge;
+        g.collisionPlanter = cls.collisionPlanter;
+        g.collisionStatue = cls.collisionStatue;
+        g.collisionTreeTrunk = cls.collisionTreeTrunk;
+        g.collisionNarrowVerticalProp = cls.collisionNarrowVerticalProp;
+        g.collisionSmallSolidProp = cls.collisionSmallSolidProp;
+        g.collisionNoBlock = cls.collisionNoBlock;
+        g.isGroundDetail = cls.isGroundDetail;
+        g.isSpellEffect = cls.isSpellEffect;
+        g.boundMin = tightMin;
+        g.boundMax = tightMax;
+        g.boundRadius = model.boundRadius > 0.01f ? model.boundRadius : glm::length(tightMax - tightMin) * 0.5f;
+        g.collision.vertices = model.collisionVertices;
+        g.collision.indices = model.collisionIndices;
+        g.collision.build();
+        models[modelId] = std::move(g);
+    }
     gl_->models.emplace(modelId, std::move(out));
     return true;
 }
@@ -202,6 +243,7 @@ void M2Renderer::unloadModel(uint32_t modelId) {
     if (it->second.ibo) glDeleteBuffers(1, &it->second.ibo);
     gl_->gpuBytes -= std::min(gl_->gpuBytes, it->second.bytes);
     gl_->models.erase(it);
+    models.erase(modelId);
 }
 
 static void boundsOf(const glm::mat4& m, const glm::vec3& localCenter, float localRadius, glm::vec3& center, float& radius) {
@@ -229,16 +271,51 @@ uint32_t M2Renderer::createInstanceWithMatrix(uint32_t modelId, const glm::mat4&
     boundsOf(modelMatrix, it->second.center, it->second.radius, inst.center, inst.radius);
     const uint32_t id = gl_->nextInstance++;
     gl_->instances.emplace(id, inst);
+    mirrorCollisionInstance(id, modelId, modelMatrix);
     return id;
 }
 
+// Gives the upstream collision code an instance to test against: only for models that can block (not clutter, effects or
+// traps), so the 9000 doodads of the area do not all become 1 KB structures.
+void M2Renderer::mirrorCollisionInstance(uint32_t id, uint32_t modelId, const glm::mat4& modelMatrix) {
+    auto mit = models.find(modelId);
+    if (mit == models.end()) return;
+    const M2ModelGPU& model = mit->second;
+    const bool authored = model.collision.valid();
+    if (model.isInvisibleTrap || model.isSpellEffect || model.isGroundDetail || (model.collisionNoBlock && !authored)) return;
+    M2Instance inst;
+    inst.id = id;
+    inst.modelId = modelId;
+    inst.position = glm::vec3(modelMatrix[3]);
+    inst.rotation = glm::vec3(0.0f);
+    inst.scale = glm::length(glm::vec3(modelMatrix[0]));
+    inst.modelMatrix = modelMatrix;
+    inst.invModelMatrix = glm::inverse(modelMatrix);
+    inst.cachedModel = &mit->second;
+    glm::vec3 localMin, localMax;
+    getTightCollisionBounds(model, localMin, localMax);
+    transformAABB(modelMatrix, localMin, localMax, inst.worldBoundsMin, inst.worldBoundsMax);
+    instances.push_back(inst);
+    instanceIndexById[id] = instances.size() - 1;
+    insertBounds(spatialGrid, inst.worldBoundsMin, inst.worldBoundsMax, id);
+}
+
 void M2Renderer::removeInstance(uint32_t instanceId) {
-    if (gl_) gl_->instances.erase(instanceId);
+    removeInstances(std::vector<uint32_t>{instanceId});
 }
 
 void M2Renderer::removeInstances(const std::vector<uint32_t>& instanceIds) {
-    if (!gl_) return;
-    for (uint32_t id : instanceIds) gl_->instances.erase(id);
+    if (!gl_ || instanceIds.empty()) return;
+    bool mirrored = false;
+    for (uint32_t id : instanceIds) {
+        gl_->instances.erase(id);
+        mirrored = mirrored || instanceIndexById.count(id) != 0;
+    }
+    if (!mirrored) return;
+    std::unordered_set<uint32_t> gone(instanceIds.begin(), instanceIds.end());
+    instances.erase(std::remove_if(instances.begin(), instances.end(), [&](const M2Instance& m) { return gone.count(m.id) != 0; }),
+                    instances.end());
+    rebuildSpatialIndex();
 }
 
 void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& transform) {
@@ -249,6 +326,19 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
     if (mit == gl_->models.end()) return;
     it->second.matrix = transform;
     boundsOf(transform, mit->second.center, mit->second.radius, it->second.center, it->second.radius);
+    auto idx = instanceIndexById.find(instanceId);
+    if (idx != instanceIndexById.end() && idx->second < instances.size()) {
+        M2Instance& mi = instances[idx->second];
+        const glm::vec3 oldMin = mi.worldBoundsMin, oldMax = mi.worldBoundsMax;
+        mi.modelMatrix = transform;
+        mi.invModelMatrix = glm::inverse(transform);
+        mi.position = glm::vec3(transform[3]);
+        mi.scale = glm::length(glm::vec3(transform[0]));
+        glm::vec3 localMin, localMax;
+        if (mi.cachedModel) getTightCollisionBounds(*mi.cachedModel, localMin, localMax);
+        transformAABB(transform, localMin, localMax, mi.worldBoundsMin, mi.worldBoundsMax);
+        refileBounds(spatialGrid, oldMin, oldMax, mi.worldBoundsMin, mi.worldBoundsMax, instanceId);
+    }
 }
 
 void M2Renderer::setInstancePosition(uint32_t instanceId, const glm::vec3& position) {
@@ -420,15 +510,24 @@ void M2Renderer::setInstanceAnimationHeld([[maybe_unused]] uint32_t instanceId, 
 
 void M2Renderer::setInstanceHighlight([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] float amount) { }
 
-void M2Renderer::setInstanceIsGameObject([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] bool isGameObject) { }
+void M2Renderer::setInstanceIsGameObject(uint32_t instanceId, bool isGameObject) {
+    auto idx = instanceIndexById.find(instanceId);
+    if (idx != instanceIndexById.end() && idx->second < instances.size()) instances[idx->second].isGameObject = isGameObject;
+}
 
 
 
 void M2Renderer::setModelPinned([[maybe_unused]] uint32_t modelId, [[maybe_unused]] bool pinned) { }
 
-void M2Renderer::setSkipCollision([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] bool skip) { }
+void M2Renderer::setSkipCollision(uint32_t instanceId, bool skip) {
+    auto idx = instanceIndexById.find(instanceId);
+    if (idx != instanceIndexById.end() && idx->second < instances.size()) instances[idx->second].skipCollision = skip;
+}
 
-void M2Renderer::setSkipWallCollision([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] bool skip) { }
+void M2Renderer::setSkipWallCollision(uint32_t instanceId, bool skip) {
+    auto idx = instanceIndexById.find(instanceId);
+    if (idx != instanceIndexById.end() && idx->second < instances.size()) instances[idx->second].skipWallCollision = skip;
+}
 
 std::optional<uint32_t> M2Renderer::soleSequenceId([[maybe_unused]] uint32_t instanceId) const { return {}; }
 

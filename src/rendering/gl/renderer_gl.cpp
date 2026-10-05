@@ -420,25 +420,42 @@ void Renderer::update(float deltaTime) {
     // The game screen re-applies the saved setting (default on) every time it is shown: keep the idle orbit off here.
     if (cameraController) cameraController->setIdleOrbitEnabled(false);
     if (wmoRenderer && camera) wmoRenderer->glUpdateCollision(camera->getPosition());
+    // No character model yet (VITA-20), so nothing ever attached the controller to a player and it ran as a free camera:
+    // no prop collision (that mode skips it), no ground from M2s, and the position the server hears about never moved.
+    // Attach it to a position-only character once the world is there, in first person (nothing to look at behind it).
+    if (cameraController && camera && terrainManager && !cameraController->getFollowTarget() &&
+        terrainManager->getLoadedTileCount() > 0) {
+        characterPosition = camera->getPosition() - glm::vec3(0.0f, 0.0f, 1.2f);  // eye height above the feet
+        cameraController->setFollowTarget(&characterPosition);
+        for (int i = 0; i < 40; ++i) cameraController->processMouseWheel(1.0f);  // all the way in
+        LOG_WARNING("Camera attached to a position-only character at (", characterPosition.x, ", ", characterPosition.y, ", ",
+                    characterPosition.z, "), first person");
+    }
     {
         // Where the collision time goes (VITA-57): every WMO query of the previous frame (camera controller and game logic
         // alike), and the camera controller's own update time.
-        static double controllerMs = 0.0, wmoMs = 0.0;
-        static long wmoCalls = 0;
+        static double controllerMs = 0.0, wmoMs = 0.0, m2Ms = 0.0;
+        static long wmoCalls = 0, m2Calls = 0;
         static int frames = 0;
         if (wmoRenderer) {
             wmoMs += wmoRenderer->getQueryTimeMs();
             wmoCalls += wmoRenderer->getQueryCallCount();
             wmoRenderer->resetQueryStats();
         }
+        if (m2Renderer) {
+            m2Ms += m2Renderer->getQueryTimeMs();
+            m2Calls += m2Renderer->getQueryCallCount();
+            m2Renderer->resetQueryStats();
+        }
         const auto t0 = std::chrono::steady_clock::now();
         if (cameraController) cameraController->update(deltaTime);
         controllerMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        if (++frames == 120) {
+        if (++frames == 600) {
             LOG_WARNING("Collision cost per frame: camera controller ", controllerMs / frames, " ms, WMO queries (whole frame) ",
-                        wmoMs / frames, " ms in ", static_cast<double>(wmoCalls) / frames, " calls");
-            controllerMs = wmoMs = 0.0;
-            wmoCalls = 0;
+                        wmoMs / frames, " ms in ", static_cast<double>(wmoCalls) / frames, " calls; M2 queries ", m2Ms / frames, " ms in ",
+                        static_cast<double>(m2Calls) / frames, " calls, ", m2Renderer ? m2Renderer->getInstanceCount() : 0, " collidable instances");
+            controllerMs = wmoMs = m2Ms = 0.0;
+            wmoCalls = m2Calls = 0;
             frames = 0;
         }
     }

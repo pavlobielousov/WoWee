@@ -773,3 +773,12 @@ The upstream collision code (`wmo_renderer_collision.cpp`) reads the shadow clas
 - The terrain tile cache (parsed tiles kept for reloading) is 4 MB on the Vita instead of ~36 MB.
 - The log shows `Collision cost per frame` (camera controller and WMO queries: 0.1 ms and 0.05 ms in 2 calls) and `WMO collision built: <path> N groups, N triangles`.
 - Result at the church: 50-56 fps, heap peak 236 MB.
+
+### 30.1 Prop (M2) collision and the player (VITA-57 part 2)
+
+Props collide: fences, posts, tree trunks, barrels, crates (verified on the device).
+
+- **The camera was a free camera.** The controller is attached to a player through `setFollowTarget`, which the desktop does when the character model spawns. The Vita has no character renderer, so nothing ever attached it, and the controller ran in its free-walk mode: that mode asks for walls only (`sweepAgainstWalls(..., includeDoodads=false)`), so props were skipped, and `Renderer::getCharacterPosition()` never moved, so the position sent to the server never changed either. `Renderer::update` now attaches a position-only character (feet 1.2 yards under the camera) once the first terrain tile is loaded and zooms in to first person. Log line: `Camera attached to a position-only character`. Found with a counter at the sweep (`skipped(noDoodads) 600 of 600`); a probe that calls `checkCollision` directly looked fine, which is why that was not enough.
+- **Mirror only what can block.** The M2 collision tables hold the models (classification flags from `classifyM2Model`, the authored collision mesh) and the instances whose model is not clutter, effect, trap or no-block: 2400 of 9000 instances.
+- **Upstream pushes props out by 0.015 yards a step** (0.02 in total per instance): a nudge that slows a walker down. On the Vita the push resolves the overlap (up to 0.30 a step, 0.6 per instance), a gated edit in `m2_renderer_collision.cpp`.
+- **Stormwind is skipped on the Vita** (`terrain_manager.cpp`, models over 64 groups): parsed it was ~100 MB of heap and 20 s on the first tile, plus 43 MB of GPU buffers. Heap peak went from 275 MB (out of memory) to 200 MB.

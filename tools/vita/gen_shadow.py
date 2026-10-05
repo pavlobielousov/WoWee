@@ -121,6 +121,8 @@ EXTRA_MEMBERS['m2_renderer.hpp'] = ('M2Renderer', """    // ---- Vita (VITA-19):
     void glRender(const gl::SceneParams& scene);
     [[nodiscard]] bool glReady() const;
     [[nodiscard]] uint32_t glInstanceCount() const;
+    /// Gives the collision code an instance (VITA-57) for models that can block.
+    void mirrorCollisionInstance(uint32_t id, uint32_t modelId, const glm::mat4& modelMatrix);
 """, """    struct Gl;
     std::unique_ptr<Gl> gl_;
 """)
