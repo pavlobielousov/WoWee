@@ -138,7 +138,17 @@ EXTRA_MEMBERS['wmo_renderer.hpp'] = ('WMORenderer', """    // ---- Vita (VITA-19
 """, """    std::unique_ptr<Gl> gl_;
 """)
 
+EXTRA_MEMBERS['water_renderer.hpp'] = ('WaterRenderer', """    // ---- Vita (VITA-21): the GL half, src/rendering/gl/water_renderer_gl.cpp ----
+    bool glInitialize();
+    void glRender(const gl::SceneParams& scene, float timeSeconds);
+    [[nodiscard]] bool glReady() const;
+    void rebuildGlMesh(int64_t key, int tileX, int tileY, uint32_t wmoId);
+    struct Gl;
+""", """    std::unique_ptr<Gl> gl_;
+""")
+
 EXTRA_INCLUDES = {
+    'water_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'wmo_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'm2_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'terrain_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',

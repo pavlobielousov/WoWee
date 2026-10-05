@@ -798,3 +798,11 @@ vitaGL's pools (video 96 MB, RAM 25, physically contiguous 26) read `vram 0/96 r
 - **Blend maps at 4 bits a channel** (`uploadRgba4444`, 2 bytes a texel): 20 MB saved, no visible difference on the device (sixteen steps of blend). `WOWEE_ALPHA8=1` in env.txt keeps eight bits to compare.
 - **A texture size cap does nothing here** (`WOWEE_TEXTURE_MAX`, default 256 for buildings and doodads, 0 = keep all): WoW's building textures are already 256 and smaller, 330 of them are 28 MB. Left in as a knob.
 - Video memory is still full; the spill goes to RAM and contiguous RAM, which have about 13 MB free between them. That is the headroom for water and characters; more needs unloading what is behind the player (buffers and textures of far buildings) or packed vertices (terrain 40 -> 28 bytes a vertex would save about 4 MB).
+
+## 32. Water (VITA-21)
+
+Terrain and building water draw and the swimming code finds it (`src/rendering/gl/water_renderer_gl.cpp`). Verified on the device: colour and transparency, the level against the banks, wading and swimming, 55-57 fps.
+
+- **The surfaces are upstream's.** `loadFromTerrain` / `loadFromWMO` keep one `WaterSurface` per chunk layer (the shadow class's `surfaces`), so the queries the camera controller uses (`getWaterHeightAt`, `getNearestWaterHeightAt`, `getWaterTypeAt`, `isWmoWaterAt`) are upstream's code over them. 315 surfaces for nine tiles around Goldshire.
+- **Drawn as one blended mesh per tile** (or per building): 24 bytes a vertex, 16-bit indices, one draw call each, after the doodads, depth write off. A flat colour per liquid type (the colours and alphas of `getLiquidColor/Alpha`), a slow two-sine shimmer (0.88 to 1.0 of the colour) from the world position and the time, fog. Not done: reflection, refraction, foam, geometry waves, the merging of upstream (`MERGE_THRESHOLD`), the Stormwind-area height correction.
+- **GPU memory:** the meshes are small enough not to move the vitaGL pool numbers (video 1/96, RAM 9/25, contiguous 4/26 MB free, unchanged).

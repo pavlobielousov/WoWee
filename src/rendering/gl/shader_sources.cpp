@@ -177,6 +177,42 @@ const char* const kBlitFragment =
     "    gl_FragColor = vec4(texture2D(uTexture, vTexCoord).rgb, 1.0);\n"
     "}\n";
 
+// ---- water -------------------------------------------------------------------------------------------------------
+// Flat colour per liquid type from the vertex (alpha is the transparency), a slow two-wave shimmer from the world position
+// and the time, fog. No reflection, refraction or waves in the geometry.
+const char* const kWaterVertex =
+    "precision highp float;\n"
+    "attribute vec3 aPosition;\n"
+    "attribute vec2 aTexCoord;\n"
+    "attribute vec4 aColor;\n"
+    "uniform mat4 uViewProj;\n"
+    "uniform vec4 uEye;\n"
+    "uniform vec4 uFog;\n"
+    "varying highp vec2 vUV;\n"
+    "varying vec4 vColor;\n"
+    "varying float vFog;\n"
+    "void main() {\n"
+    "    vUV = aTexCoord;\n"
+    "    vColor = aColor;\n"
+    "    vFog = clamp((uFog.y - distance(uEye.xyz, aPosition)) / (uFog.y - uFog.x), 0.0, 1.0);\n"
+    "    gl_Position = uViewProj * vec4(aPosition, 1.0);\n"
+    "}\n";
+
+const char* const kWaterFragment =
+    "precision mediump float;\n"
+    "varying highp vec2 vUV;\n"
+    "varying vec4 vColor;\n"
+    "varying float vFog;\n"
+    "uniform vec3 uFogColor;\n"
+    "uniform float uTime;\n"
+    "void main() {\n"
+    "    float a = sin(vUV.x * 1.7 + uTime * 0.9);\n"
+    "    float b = sin(vUV.y * 1.3 - uTime * 0.7);\n"
+    "    float shimmer = 0.88 + 0.12 * (a * b + 1.0) * 0.5 * 2.0 * 0.5;\n"
+    "    vec3 lit = vColor.rgb * shimmer;\n"
+    "    gl_FragColor = vec4(mix(uFogColor, lit, vFog), vColor.a);\n"
+    "}\n";
+
 struct Built {
     std::string vertex;
     std::string fragment;
@@ -260,6 +296,11 @@ const ProgramDef& m2Program(M2Kind kind) {
         done = true;
     }
     return defs[static_cast<int>(kind)];
+}
+
+const ProgramDef& waterProgram() {
+    static const ProgramDef def{"water", ProgramClass::Plain, kWaterVertex, kWaterFragment, {"aPosition", "aTexCoord", "aColor"}};
+    return def;
 }
 
 const ProgramDef& blitProgram() {

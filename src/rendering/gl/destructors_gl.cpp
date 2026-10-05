@@ -42,7 +42,6 @@ QuestMarkerRenderer::~QuestMarkerRenderer() = default;
 Skybox::~Skybox() = default;
 SkySystem::~SkySystem() = default;
 StarField::~StarField() = default;
-WaterRenderer::~WaterRenderer() = default;
 Weather::~Weather() = default;
 
 }  // namespace wowee::rendering
