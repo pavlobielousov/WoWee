@@ -2615,14 +2615,16 @@ void TerrainManager::streamTiles() {
                 if (loadedTiles.find(coord) != loadedTiles.end()) continue;
                 if (pendingTiles.find(coord) != pendingTiles.end()) continue;
                 if (failedTiles.find(coord) != failedTiles.end()) continue;
-                if (shouldSkipMissingAdt(coord)) continue;
 #ifdef __vita__
+                // The cheap tests first: shouldSkipMissingAdt asks the asset manager whether the tile's file exists, which for a tile
+                // that is not loaded and not queued meant a look at the memory card every pass.
                 if (vitaTileOutOfReach(coord, 0.0f)) continue;  // all fog: not worth the memory (the next pass looks again)
                 // A hard budget of tiles on the heap (about 10 MB of heap and 4 MB of GPU buffers each): a camera at a tile corner sees
                 // more than nine, and tiles walked away from stay until they are out of reach, so roaming ran the 256 MB heap out
                 // (bad_alloc with 13 tiles loaded). The nearest tiles load first, so a full budget leaves the far corner out.
                 if (loadedTiles.size() + pendingTiles.size() >= kVitaMaxResidentTiles) continue;
 #endif
+                if (shouldSkipMissingAdt(coord)) continue;
 
                 newTiles.push_back({.coord = coord, .distSq = dx*dx + dy*dy});
                 pendingTiles[coord] = true;

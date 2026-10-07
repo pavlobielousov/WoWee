@@ -222,6 +222,11 @@ void Logger::emitLineLocked(LogLevel level, const std::string& rawMessage) {
     __android_log_write(priority, "wowee", message.c_str());
 #endif
     if (fileStream.is_open()) {
+#ifdef __vita__
+        // The file is written by a thread of its own: a write from here waited behind the workers' reads on the memory card.
+        platform::vita::asyncLogWrite(fileStream, line.str() + '\n');
+        return;
+#endif
         fileStream << line.str() << '\n';
         // An error or worse goes to disk at once: the lines just before a crash
         // are the ones a report is opened for, and a crash runs no destructor.
@@ -251,6 +256,9 @@ void Logger::emitLineLocked(LogLevel level, const std::string& rawMessage) {
 }
 
 void Logger::flushIfStale() {
+#ifdef __vita__
+    return;  // the writer thread flushes
+#endif
     std::lock_guard<std::mutex> lock(mutex);
     if (!unflushed_ || !fileStream.is_open()) return;
     const auto now = std::chrono::steady_clock::now();

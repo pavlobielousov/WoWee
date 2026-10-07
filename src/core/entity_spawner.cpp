@@ -1,5 +1,8 @@
 #include "core/entity_spawner.hpp"
 #include "core/thread_pool.hpp"
+#ifdef __vita__
+#include "pipeline/m2_asset_loader.hpp"
+#endif
 #include "rendering/m2_model_classifier.hpp"
 #include "core/appearance_composer.hpp"
 #include "pipeline/char_sections.hpp"
@@ -377,14 +380,6 @@ bool EntitySpawner::tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t inst
     if (!renderer_ || !renderer_->getCharacterRenderer() || !assetManager_ || !gameHandler_) return false;
     auto* charRenderer = renderer_->getCharacterRenderer();
     if (!charRenderer) return false;
-#ifdef __vita__
-    // The Vita draws no weapons yet (VITA-20 phase D). Without this the function read each weapon model and its textures from
-    // the card on the main thread (0.7 to 2.3 s a creature, measured) and then the renderer refused the attach.
-    (void)guid;
-    (void)instanceId;
-    return false;
-#endif
-
     auto entity = gameHandler_->getEntityManager().getEntity(guid);
     if (!entity || entity->getType() != game::ObjectType::UNIT) return false;
     auto unit = std::static_pointer_cast<game::Unit>(entity);
@@ -452,8 +447,35 @@ bool EntitySpawner::tryAttachCreatureVirtualWeapons(uint64_t guid, uint32_t inst
 
         // Main-hand NPC weapon path: only use actual weapon models.
         std::string m2Path = "Item\\ObjectComponents\\Weapon\\" + modelFile;
+#ifdef __vita__
+        // Read and parsed on a worker; this attempt only starts it (see weaponM2Cache_), a later retry attaches.
+        std::shared_ptr<pipeline::M2Model> weaponLoaded;
+        {
+            auto cached = weaponM2Cache_.find(m2Path);
+            if (cached == weaponM2Cache_.end()) {
+                if (weaponM2Cache_.size() >= 32) {  // bounded: forget the finished ones (a weapon comes back through the file cache)
+                    for (auto it = weaponM2Cache_.begin(); it != weaponM2Cache_.end();) {
+                        it = it->second.wait_for(std::chrono::seconds(0)) == std::future_status::ready ? weaponM2Cache_.erase(it) : std::next(it);
+                    }
+                }
+                pipeline::AssetManager* am = assetManager_;
+                const std::string pathCopy = m2Path;
+                std::shared_future<std::shared_ptr<pipeline::M2Model>> fut =
+                    ThreadPool::ioWorkers().submit([am, pathCopy]() -> std::shared_ptr<pipeline::M2Model> {
+                        auto model = std::make_shared<pipeline::M2Model>();
+                        return pipeline::loadM2WithSkin(*am, pathCopy, *model) ? model : nullptr;
+                    }).share();
+                cached = weaponM2Cache_.emplace(m2Path, std::move(fut)).first;
+            }
+            if (cached->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;  // not read yet
+            weaponLoaded = cached->second.get();
+        }
+        if (!weaponLoaded) return false;
+        const pipeline::M2Model& weaponModel = *weaponLoaded;
+#else
         pipeline::M2Model weaponModel;
         if (!loadWeaponM2(m2Path, weaponModel)) return false;
+#endif
 
         std::string texturePath;
         if (!textureName.empty()) {

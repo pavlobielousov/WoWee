@@ -4,6 +4,7 @@
 #include "rendering/renderer.hpp"
 
 #include "core/logger.hpp"
+#include "core/thread_budget.hpp"
 #include "platform/vita/ime_dialog.hpp"
 #include "core/window.hpp"
 #include "rendering/imgui_backend.hpp"
@@ -33,6 +34,9 @@
 #include "game/zone_manager.hpp"
 
 #include <malloc.h>
+#include <atomic>
+#include <mutex>
+#include <thread>
 
 #include <psp2/io/fcntl.h>
 #include <psp2/io/stat.h>
@@ -79,6 +83,9 @@
 namespace wowee::rendering {
 
 namespace gl { extern bool g_charNoAnim, g_charAnimAll, g_m2WhereRequest; }
+}  // namespace wowee::rendering
+namespace wowee::platform::vita { void vitaIoTraceDrain(); }
+namespace wowee::rendering {
 
 namespace {
 // Live profiling switches (VITA-19): ux0:data/wowee/gl.cfg is read every 60 frames, words in it: noterrain nowmo nom2 and
@@ -90,23 +97,54 @@ struct DebugFlags {
 };
 DebugFlags g_debug;
 
+// The two diagnostic files (gl.cfg and shot.cmd) are looked at by a thread of their own. The main thread used to do it (a stat of
+// shot.cmd every 30 frames in endFrame, an fopen of gl.cfg every 60 in beginFrame), and the memory card is one queue: while workers
+// streamed reads, each of those waited 100 to 960 ms (the `beginFrame`/`endFrame` stalls of the log, VITA-20). Now the main thread
+// only reads what the poller found.
+std::atomic<bool> g_shotRequested{false};
+std::mutex g_pollMutex;
+DebugFlags g_polled;  // the last gl.cfg, written by the poller under g_pollMutex
+
+void debugPollLoop() {
+    core::enterThread(core::ThreadRole::UpdateCheck);  // lowest priority, off the main thread's core
+    for (;;) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        platform::vita::vitaIoTraceDrain();  // slow card calls the main thread queued (WOWEE_IO_TRACE_MS)
+        SceIoStat info;
+        if (sceIoGetstat("ux0:data/wowee/shot.cmd", &info) >= 0) {
+            sceIoRemove("ux0:data/wowee/shot.cmd");
+            g_shotRequested.store(true);
+        }
+        DebugFlags f;
+        if (FILE* fp = fopen("ux0:data/wowee/gl.cfg", "r")) {
+            char buf[256] = {0};
+            const size_t n = fread(buf, 1, sizeof buf - 1, fp);
+            buf[n] = 0;
+            fclose(fp);
+            f.noTerrain = strstr(buf, "noterrain") != nullptr;
+            f.noWmo = strstr(buf, "nowmo") != nullptr;
+            f.noM2 = strstr(buf, "nom2") != nullptr;
+            f.noChar = strstr(buf, "nochar") != nullptr;
+            f.charNoAnim = strstr(buf, "noanim") != nullptr;
+            f.charAnimAll = strstr(buf, "animall") != nullptr;
+            f.where = strstr(buf, "where") != nullptr;
+            if (const char* sc = strstr(buf, "scale=")) f.scale = std::clamp(static_cast<float>(atof(sc + 6)), 0.2f, 1.0f);
+        }
+        std::lock_guard<std::mutex> lock(g_pollMutex);
+        g_polled = f;
+    }
+}
+
 void pollDebugFlags() {
-    static unsigned tick = 0;
-    if (++tick % 60 != 0) return;
+    static const bool started = [] {
+        std::thread(debugPollLoop).detach();
+        return true;
+    }();
+    (void)started;
     DebugFlags f;
-    if (FILE* fp = fopen("ux0:data/wowee/gl.cfg", "r")) {
-        char buf[256] = {0};
-        const size_t n = fread(buf, 1, sizeof buf - 1, fp);
-        buf[n] = 0;
-        fclose(fp);
-        f.noTerrain = strstr(buf, "noterrain") != nullptr;
-        f.noWmo = strstr(buf, "nowmo") != nullptr;
-        f.noM2 = strstr(buf, "nom2") != nullptr;
-        f.noChar = strstr(buf, "nochar") != nullptr;
-        f.charNoAnim = strstr(buf, "noanim") != nullptr;
-        f.charAnimAll = strstr(buf, "animall") != nullptr;
-        f.where = strstr(buf, "where") != nullptr;
-        if (const char* sc = strstr(buf, "scale=")) f.scale = std::clamp(static_cast<float>(atof(sc + 6)), 0.2f, 1.0f);
+    {
+        std::lock_guard<std::mutex> lock(g_pollMutex);
+        f = g_polled;
     }
     if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.noChar != g_debug.noChar || f.charNoAnim != g_debug.charNoAnim || f.charAnimAll != g_debug.charAnimAll || f.scale != g_debug.scale) {
         LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " nochar=", f.noChar, " noanim=", f.charNoAnim, " animall=", f.charAnimAll, " scale=", f.scale);
@@ -168,14 +206,7 @@ void Renderer::endFrame() {
     // dialog is active at the swap; without this it opens invisibly and takes the touch input.
     // On demand: a file ux0:data/wowee/shot.cmd (uploaded over FTP) takes a screenshot within half a second and is removed.
     {
-        static unsigned tick = 0;
-        if (g_shotPath.empty() && ++tick % 30 == 0) {
-            SceIoStat info;
-            if (sceIoGetstat("ux0:data/wowee/shot.cmd", &info) >= 0) {
-                sceIoRemove("ux0:data/wowee/shot.cmd");
-                g_shotPath = "ux0:data/wowee/shot.png";
-            }
-        }
+        if (g_shotPath.empty() && g_shotRequested.exchange(false)) g_shotPath = "ux0:data/wowee/shot.png";  // found by debugPollLoop
     }
     if (g_shotPath.empty()) {
         static const long shotFrame = [] {

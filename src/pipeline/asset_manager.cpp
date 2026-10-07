@@ -172,13 +172,52 @@ void AssetManager::shutdown() {
     initialized = false;
 }
 
+// Whether the override directory is there at all. The path is always dataPath + "/override" and on the Vita that directory is usually
+// absent: every lookup then stat()ed the memory card for a file in a directory that is not there (25 first-time lookups of equipment
+// textures took 3.3 s of the main thread in two minutes, up to 400 ms each, because the card is one queue). Asked once.
+static bool overrideDirectoryPresent([[maybe_unused]] const std::string& path) {
+#ifdef __vita__
+    static std::mutex mutex;
+    static std::string checked;
+    static bool present = false;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (checked != path) {
+        checked = path;
+        std::error_code ec;
+        present = std::filesystem::is_directory(path, ec);
+    }
+    return present;
+#else
+    return true;
+#endif
+}
+
 std::string AssetManager::resolveFile(const std::string& normalizedPath) const {
     // Check override directory first (for HD upgrades, custom textures)
-    if (!overridePath_.empty()) {
+    if (!overridePath_.empty() && overrideDirectoryPresent(overridePath_)) {
+#ifdef __vita__
+        // Each check below is a stat() of the memory card, and the card is one queue: 38 of them from the main thread took 5.8 s in a
+        // two-minute walk (up to 408 ms each) while workers streamed reads. A file that is not in the override directory stays
+        // out of it for the session, so the answer is remembered (VITA-20).
+        static std::mutex overrideMissMutex;
+        static std::unordered_set<std::string> overrideMissing;
+        auto overrideExists = [&](const std::string& p) {
+            {
+                std::lock_guard<std::mutex> lock(overrideMissMutex);
+                if (overrideMissing.count(p)) return false;
+            }
+            if (LooseFileReader::fileExists(p)) return true;
+            std::lock_guard<std::mutex> lock(overrideMissMutex);
+            if (overrideMissing.size() < 200000) overrideMissing.insert(p);
+            return false;
+        };
+#else
+        auto overrideExists = [&](const std::string& p) { return LooseFileReader::fileExists(p); };
+#endif
         const auto* entry = manifest_.lookup(normalizedPath);
         if (entry && !entry->filesystemPath.empty()) {
             std::string overrideFsPath = overridePath_ + "/" + entry->filesystemPath;
-            if (LooseFileReader::fileExists(overrideFsPath)) {
+            if (overrideExists(overrideFsPath)) {
                 return overrideFsPath;
             }
         }
@@ -191,7 +230,7 @@ std::string AssetManager::resolveFile(const std::string& normalizedPath) const {
         std::string overrideByPath = normalizedPath;
         std::replace(overrideByPath.begin(), overrideByPath.end(), '\\', '/');
         overrideByPath = overridePath_ + "/" + overrideByPath;
-        if (LooseFileReader::fileExists(overrideByPath)) {
+        if (overrideExists(overrideByPath)) {
             return overrideByPath;
         }
     }
@@ -217,10 +256,31 @@ std::string AssetManager::resolveFile(const std::string& normalizedPath) const {
     std::string looseCandidate = normalizedPath;
     std::replace(looseCandidate.begin(), looseCandidate.end(), '\\', '/');
     looseCandidate = dataPath + "/" + looseCandidate;
+#ifdef __vita__
+    // A path that is not in the manifest costs a stat() of the memory card on every question, and the card is one queue: while worker
+    // threads stream reads, each stat from the main thread waited 100 to 500 ms (found with the 0.5 s `streamTiles`: it asked for tiles
+    // that were out of reach every pass). A file that was not there stays not there for the session, so the answer is remembered
+    // (VITA-20).
+    static std::mutex missMutex;
+    static std::unordered_set<std::string> missing;
+    {
+        std::lock_guard<std::mutex> lock(missMutex);
+        if (missing.count(looseCandidate)) return {};
+    }
+    if (LooseFileReader::fileExists(looseCandidate)) {
+        return looseCandidate;
+    }
+    {
+        std::lock_guard<std::mutex> lock(missMutex);
+        if (missing.size() < 200000) missing.insert(looseCandidate);
+    }
+    return {};
+#else
     if (LooseFileReader::fileExists(looseCandidate)) {
         return looseCandidate;
     }
     return {};
+#endif
 }
 
 bool AssetManager::setBaseFallbackPath(const std::string& basePath,
