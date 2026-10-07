@@ -91,6 +91,7 @@ bool TerrainRenderer::glInitialize(pipeline::AssetManager* assetManager) {
     gl_->assets = assetManager;
     this->assetManager = assetManager;
     gl_->textures.setAssetManager(assetManager);
+    gl_->textures.setAsync(true);  // BLPs are read on a worker; get() answers with a placeholder name (gl_texture.hpp)
     // Compressed textures stay compressed (the BLP loader decodes them to RGBA unless told the GPU takes the blocks).
     pipeline::setBlockCompressionSupported(true);
     for (int n = 0; n < 4; ++n) {
@@ -299,6 +300,7 @@ bool TerrainRenderer::loadTerrain(const pipeline::TerrainMesh& mesh, const std::
 // ---- drawing ------------------------------------------------------------------------------------------------------------
 
 void TerrainRenderer::glRender(const gl::SceneParams& scene) {
+    if (gl_) gl_->textures.pump(2.0);
     if (!glReady() || gl_->tiles.empty()) return;
     static gl::FrameStats stats("terrain");
     stats.begin();

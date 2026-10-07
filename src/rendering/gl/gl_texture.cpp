@@ -3,9 +3,12 @@
 #include "rendering/gl/gl_texture.hpp"
 
 #include "core/logger.hpp"
+#include "core/thread_pool.hpp"
 #include "pipeline/asset_manager.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <vector>
 
 #ifndef GL_COMPRESSED_RGBA_S3TC_DXT1_EXT
@@ -33,11 +36,17 @@ GLenum dxtFormat(pipeline::BLPCompression c) {
 
 }  // namespace
 
-GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat, int maxDimension) {
+GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat, int maxDimension, GLuint reuse) {
     GlTexture out;
     if (!image.isValid()) return out;
 
-    glGenTextures(1, &out.id);
+    // `reuse` is a texture name that already exists (an async placeholder): the image goes into it, and a failure leaves it alone.
+    if (reuse != 0) out.id = reuse;
+    else glGenTextures(1, &out.id);
+    auto discard = [&]() {
+        if (reuse == 0) glDeleteTextures(1, &out.id);
+        return GlTexture{};
+    };
     glBindTexture(GL_TEXTURE_2D, out.id);
     const GLint wrap = repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
 
@@ -62,19 +71,13 @@ GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat, 
             out.bytes += expected;
             ++uploaded;
         }
-        if (uploaded == 0) {
-            glDeleteTextures(1, &out.id);
-            return GlTexture{};
-        }
+        if (uploaded == 0) return discard();
         // After every level is uploaded (vitaGL applies the mip count when the filter is set).
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, uploaded > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
     } else {
         // Palettised and uncompressed BLPs arrive decoded as RGBA8.
         const std::vector<uint8_t>& px = image.data;
-        if (px.size() < static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height) * 4) {
-            glDeleteTextures(1, &out.id);
-            return GlTexture{};
-        }
+        if (px.size() < static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height) * 4) return discard();
         // Halve (2x2 box) until the image fits the cap; sizes that are not a power of two stop where they cannot halve evenly.
         std::vector<uint8_t> level(px.begin(), px.begin() + static_cast<std::ptrdiff_t>(image.width) * image.height * 4);
         int w = image.width, h = image.height;
@@ -198,6 +201,34 @@ GLuint TextureCache::get(const std::string& path) {
     auto it = entries_.find(path);
     if (it != entries_.end()) return it->second.id != 0 ? it->second.id : white();
     GlTexture tex;
+    if (async_ && assets_) {
+        if (!assets_->fileExists(path)) {
+            entries_.emplace(path, tex);  // a missing file: white, remembered
+            return white();
+        }
+        // A placeholder now (a neutral grey, 1x1), the image when a worker has it.
+        glGenTextures(1, &tex.id);
+        glBindTexture(GL_TEXTURE_2D, tex.id);
+        const uint8_t grey[4] = {150, 145, 135, 255};
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, grey);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        entries_.emplace(path, tex);
+        ++pending_;
+        jobs_.fetch_add(1);
+        pipeline::AssetManager* assets = assets_;
+        core::ThreadPool::ioWorkers().submit([this, assets, path]() {
+            pipeline::BLPImage image = assets->loadTexture(path, /*keepCompressed=*/true);
+            {
+                std::lock_guard<std::mutex> lock(readyMutex_);
+                ready_.emplace_back(path, std::move(image));
+            }
+            jobs_.fetch_sub(1);
+        });
+        return tex.id;
+    }
     if (assets_) {
         const pipeline::BLPImage image = assets_->loadTexture(path, /*keepCompressed=*/true);
         tex = uploadBlp(image, skipFor(image), true, maxDimension_);
@@ -217,7 +248,50 @@ void TextureCache::adopt(const std::string& path, const pipeline::BLPImage& imag
     entries_.emplace(path, tex);
 }
 
+void TextureCache::pump(double budgetMs) {
+    if (pending_ == 0) return;
+    const auto start = std::chrono::steady_clock::now();
+    bool first = true;
+    for (;;) {
+        std::pair<std::string, pipeline::BLPImage> item;
+        {
+            std::lock_guard<std::mutex> lock(readyMutex_);
+            if (ready_.empty()) return;
+            item = std::move(ready_.front());
+            ready_.pop_front();
+        }
+        auto it = entries_.find(item.first);
+        if (it != entries_.end() && pending_ > 0) {
+            --pending_;
+            const GLuint id = it->second.id;
+            GlTexture up = uploadBlp(item.second, skipFor(item.second), true, maxDimension_, id);
+            if (up.id != 0) {
+                it->second.bytes = up.bytes;
+                it->second.width = up.width;
+                it->second.height = up.height;
+                bytes_ += up.bytes;
+                if (!item.second.isBlockCompressed()) { rgbaBytes_ += up.bytes; ++rgbaCount_; }
+            } else {
+                LOG_WARNING("Texture ", item.first, ": could not be loaded, keeping the placeholder");
+            }
+        }
+        first = false;
+        if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() >= budgetMs) return;
+    }
+    (void)first;
+}
+
+void TextureCache::waitIdle() {
+    while (jobs_.load() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+}
+
 void TextureCache::clear() {
+    waitIdle();
+    {
+        std::lock_guard<std::mutex> lock(readyMutex_);
+        ready_.clear();
+    }
+    pending_ = 0;
     for (auto& e : entries_) deleteTexture(e.second);
     entries_.clear();
     deleteTexture(white_);

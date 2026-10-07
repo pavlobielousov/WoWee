@@ -8,8 +8,11 @@
 
 #include <vitaGL.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -29,7 +32,7 @@ struct GlTexture {
 /// chain: a quarter of the memory of RGBA8 before halving (VITA-20).
 /// (Original description follows.) `skipMips` drops that many of the largest levels (a compressed image only; the result is never
 /// smaller than 4x4). Uses `repeat` wrapping (terrain and doodads tile).
-GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat = true, int maxDimension = 0);
+GlTexture uploadBlp(const pipeline::BLPImage& image, int skipMips, bool repeat = true, int maxDimension = 0, GLuint reuse = 0);
 
 /// RGBA8 pixels, no mips, linear, clamped.
 GlTexture uploadRgba(const uint8_t* rgba, int width, int height, bool repeat = false);
@@ -43,6 +46,20 @@ void deleteTexture(GlTexture& texture);
 /// Textures by path. A path that fails to load is remembered (white is returned) so it is not retried every chunk.
 class TextureCache {
 public:
+    TextureCache() = default;
+    TextureCache(const TextureCache&) = delete;
+    TextureCache& operator=(const TextureCache&) = delete;
+    ~TextureCache() { waitIdle(); }
+    /// With this on, get() never reads a file: it returns a GL texture name at once (a 1x1 placeholder) and a worker thread reads and
+    /// decodes the BLP; pump() then uploads the image INTO THE SAME name, so everything that kept the name shows the real texture from
+    /// then on. A missing file still answers white. Reading a BLP from the card on the main thread cost 25 to 280 ms, and a tile or a
+    /// crossroads asks for dozens (VITA-20: the multi-second hitches of the terrain, doodad and building finalize steps).
+    void setAsync(bool on) { async_ = on; }
+    /// Upload decoded images that are ready, within `budgetMs` (at least one when any waits). Main thread; call it every frame.
+    void pump(double budgetMs);
+    [[nodiscard]] std::size_t pendingCount() const { return pending_; }
+    /// Block until the workers have nothing left (they hold pointers into this cache).
+    void waitIdle();
     void setAssetManager(pipeline::AssetManager* assets) { assets_ = assets; }
     void setSkipMips(int n) { skipMips_ = n; }
     /// Drops the largest mip levels of any block-compressed texture bigger than this (0 = keep all): a 960x544 screen cannot
@@ -66,6 +83,11 @@ private:
     int maxDimension_ = 0;
     [[nodiscard]] int skipFor(const pipeline::BLPImage& image) const;
     std::unordered_map<std::string, GlTexture> entries_;
+    bool async_ = false;
+    std::size_t pending_ = 0;  // placeholders waiting for their image (main thread)
+    std::mutex readyMutex_;
+    std::deque<std::pair<std::string, pipeline::BLPImage>> ready_;
+    std::atomic<int> jobs_{0};
     GlTexture white_;
     std::size_t bytes_ = 0;
     std::size_t rgbaBytes_ = 0, rgbaCount_ = 0;

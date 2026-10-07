@@ -91,6 +91,7 @@ bool M2Renderer::glInitialize(pipeline::AssetManager* assets) {
     gl_->assets = assets;
     assetManager = assets;
     gl_->textures.setAssetManager(assets);
+    gl_->textures.setAsync(true);  // BLPs are read on a worker; get() answers with a placeholder name (gl_texture.hpp)
     {
         // Doodad and building textures are capped at 256 on a side (WOWEE_TEXTURE_MAX in env.txt, 0 = keep all).
         const char* v = std::getenv("WOWEE_TEXTURE_MAX");
@@ -395,6 +396,7 @@ bool M2Renderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, fl
 uint32_t M2Renderer::glInstanceCount() const { return gl_ ? static_cast<uint32_t>(gl_->instances.size()) : 0; }
 
 void M2Renderer::glRender(const gl::SceneParams& scene) {
+    if (gl_) gl_->textures.pump(2.0);  // textures the workers have read: uploaded into the names the models already hold
     if (!glReady() || gl_->instances.empty()) return;
     if (gl::g_m2WhereRequest) {
         // Diagnostic (VITA-20): which doodads are around the camera and what collides, for "this tree does not block me".

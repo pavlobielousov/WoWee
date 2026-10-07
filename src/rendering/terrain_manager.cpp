@@ -2618,6 +2618,10 @@ void TerrainManager::streamTiles() {
                 if (shouldSkipMissingAdt(coord)) continue;
 #ifdef __vita__
                 if (vitaTileOutOfReach(coord, 0.0f)) continue;  // all fog: not worth the memory (the next pass looks again)
+                // A hard budget of tiles on the heap (about 10 MB of heap and 4 MB of GPU buffers each): a camera at a tile corner sees
+                // more than nine, and tiles walked away from stay until they are out of reach, so roaming ran the 256 MB heap out
+                // (bad_alloc with 13 tiles loaded). The nearest tiles load first, so a full budget leaves the far corner out.
+                if (loadedTiles.size() + pendingTiles.size() >= kVitaMaxResidentTiles) continue;
 #endif
 
                 newTiles.push_back({.coord = coord, .distSq = dx*dx + dy*dy});
@@ -2652,8 +2656,8 @@ void TerrainManager::streamTiles() {
         int dy = coord.y - currentTile.y;
 
 #ifdef __vita__
-        // Out of reach by 150 yards more than a tile needs to load (hysteresis, so a tile at the edge does not flicker): unload it.
-        if (!alreadyQueued.count(coord) && !(coord.x == currentTile.x && coord.y == currentTile.y) && vitaTileOutOfReach(coord, 150.0f)) {
+        // Out of reach by 60 yards more than a tile needs to load (hysteresis, so a tile at the edge does not flicker): unload it.
+        if (!alreadyQueued.count(coord) && !(coord.x == currentTile.x && coord.y == currentTile.y) && vitaTileOutOfReach(coord, 60.0f)) {
             pendingUnloadQueue_.push_back(coord);
             queuedNow++;
             continue;

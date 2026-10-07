@@ -14,6 +14,7 @@
 #include "rendering/gl/gl_texture.hpp"
 #include "rendering/gl/shader_sources.hpp"
 #include "rendering/m2_track_sampler.hpp"
+#include "core/thread_pool.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -25,7 +26,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <atomic>
 #include <cstdint>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <cstring>
 #include <cstdlib>
 #include <limits>
@@ -37,6 +42,7 @@ namespace wowee::rendering {
 class GpuTexture {
 public:
     GLuint id = 0;
+    bool pending = false;  // being read and decoded on a worker: draws nothing yet (white would flash on a textured character)
 };
 
 namespace gl {
@@ -64,6 +70,7 @@ struct CharacterRenderer::Gl {
         GLuint vbo = 0, ibo = 0;
         std::size_t bytes = 0;
         std::size_t* total = nullptr;
+        std::atomic<bool> baked{true};  // false while a worker is still skinning the Stand pose into it: the instance draws nothing yet
         ~Buffers() {
             if (vbo) glDeleteBuffers(1, &vbo);
             if (ibo) glDeleteBuffers(1, &ibo);
@@ -103,6 +110,18 @@ struct CharacterRenderer::Gl {
     std::size_t slotVerts = 0;    // capacity of one slot buffer, in vertices
     int parity = 0;
     std::vector<Vertex> staging;
+    // Work done on worker threads and picked up on the main thread (the only one that may touch GL): BLP images read and decoded for
+    // loadTexture, and Stand poses skinned for loadModel. Both wait in these queues for update() to upload them within a time budget.
+    std::mutex readyMutex;
+    std::deque<std::pair<std::string, pipeline::BLPImage>> readyImages;
+    struct ReadyBake {
+        std::shared_ptr<Buffers> buf;
+        std::vector<Vertex> verts;
+    };
+    std::deque<ReadyBake> readyBakes;
+    std::atomic<int> jobs{0};  // submitted and not finished: clear() waits for them (they point into the models)
+    long uploadedTextures = 0, uploadedBakes = 0;
+    double uploadMsTotal = 0.0;
     std::vector<uint32_t> slotOwner;  // instance id holding each slot (0 = free)
     std::vector<int> slotParity;      // the parity buffer of each slot that was written last (-1 = never)
     uint32_t frameCounter = 0;
@@ -217,29 +236,9 @@ static void skinVertices(const pipeline::M2Model& model, const std::vector<glm::
 #endif
 }
 
-void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
-    auto mit = models.find(instance.modelId);
-    if (mit == models.end()) return;
-    const pipeline::M2Model& model = mit->second.data;
-    const std::size_t n = model.bones.size();
-    if (n == 0) return;
-    instance.boneMatrices.resize(n);
-    const auto& gsd = model.globalSequenceDurations;
-    for (std::size_t i = 0; i < n; ++i) {
-        const pipeline::M2Bone& bone = model.bones[i];
-        glm::mat4 local = getBoneTransform(bone, instance.animationTime, instance.globalSequenceTime, instance.currentSequenceIndex, gsd);
-        if (bone.keyBoneId == 4 && instance.torsoYawOverrideRad != 0.0f) {  // the lower spine
-            local = glm::translate(glm::mat4(1.0f), bone.pivot) * glm::rotate(glm::mat4(1.0f), instance.torsoYawOverrideRad, glm::vec3(0.0f, 0.0f, 1.0f)) *
-                    glm::translate(glm::mat4(1.0f), -bone.pivot) * local;
-        }
-        if (bone.parentBone >= 0 && static_cast<std::size_t>(bone.parentBone) < i) instance.boneMatrices[i] = instance.boneMatrices[bone.parentBone] * local;
-        else instance.boneMatrices[i] = local;
-    }
-}
-
-// M2 bone transform T(pivot) * T(trans) * R(rot) * S(scale) * T(-pivot), built directly (upstream's own).
-glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime, int sequenceIndex,
-                                              const std::vector<uint32_t>& globalSeqDurations) {
+// M2 bone transform T(pivot) * T(trans) * R(rot) * S(scale) * T(-pivot), built directly (upstream's own). Pure: workers call it.
+static glm::mat4 boneLocalTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime, int sequenceIndex,
+                                    const std::vector<uint32_t>& globalSeqDurations) {
     const glm::vec3 translation = m2_track::sampleVec3(bone.translation, sequenceIndex, animTime, globalSeqTime, globalSeqDurations, glm::vec3(0.0f));
     const glm::quat rotation = m2_track::sampleQuat(bone.rotation, sequenceIndex, animTime, globalSeqTime, globalSeqDurations);
     const glm::vec3 scale = m2_track::sampleVec3(bone.scale, sequenceIndex, animTime, globalSeqTime, globalSeqDurations, glm::vec3(1.0f));
@@ -252,6 +251,35 @@ glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, floa
     m[2] = glm::vec4(c2, 0.0f);
     m[3] = glm::vec4(t, 1.0f);
     return m;
+}
+
+// The bone matrices of a model at a time in a sequence. Pure (reads the model, writes `out`): the main thread and the workers share it.
+static void computeBoneMatrices(const pipeline::M2Model& model, int sequence, float animTime, float globalSeqTime, float torsoYawRad,
+                                std::vector<glm::mat4>& out) {
+    const std::size_t n = model.bones.size();
+    out.resize(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        const pipeline::M2Bone& bone = model.bones[i];
+        glm::mat4 local = boneLocalTransform(bone, animTime, globalSeqTime, sequence, model.globalSequenceDurations);
+        if (bone.keyBoneId == 4 && torsoYawRad != 0.0f) {  // the lower spine
+            local = glm::translate(glm::mat4(1.0f), bone.pivot) * glm::rotate(glm::mat4(1.0f), torsoYawRad, glm::vec3(0.0f, 0.0f, 1.0f)) *
+                    glm::translate(glm::mat4(1.0f), -bone.pivot) * local;
+        }
+        if (bone.parentBone >= 0 && static_cast<std::size_t>(bone.parentBone) < i) out[i] = out[static_cast<std::size_t>(bone.parentBone)] * local;
+        else out[i] = local;
+    }
+}
+
+void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
+    auto mit = models.find(instance.modelId);
+    if (mit == models.end() || mit->second.data.bones.empty()) return;
+    computeBoneMatrices(mit->second.data, instance.currentSequenceIndex, instance.animationTime, instance.globalSequenceTime,
+                        instance.torsoYawOverrideRad, instance.boneMatrices);
+}
+
+glm::mat4 CharacterRenderer::getBoneTransform(const pipeline::M2Bone& bone, float animTime, float globalSeqTime, int sequenceIndex,
+                                              const std::vector<uint32_t>& globalSeqDurations) {
+    return boneLocalTransform(bone, animTime, globalSeqTime, sequenceIndex, globalSeqDurations);
 }
 
 CharacterRenderer::CharacterRenderer() = default;
@@ -334,6 +362,13 @@ void CharacterRenderer::shutdown() {
 
 void CharacterRenderer::clear() {
     if (!gl_) return;
+    // The workers read the models and hold buffer pointers: let them finish, then drop what they produced.
+    while (gl_->jobs.load() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    {
+        std::lock_guard<std::mutex> lock(gl_->readyMutex);
+        gl_->readyImages.clear();
+        gl_->readyBakes.clear();
+    }
     gl_->glModels.clear();
     gl_->byFile.clear();
     gl_->extras.clear();
@@ -351,14 +386,32 @@ GpuTexture* CharacterRenderer::loadTexture(const std::string& path) {
     if (it != gl_->textureObjects.end()) return it->second.get();
     if (predecodedBLPCache_) {
         auto pre = predecodedBLPCache_->find(path);
-        if (pre != predecodedBLPCache_->end()) gl_->textures.adopt(path, pre->second);
+        if (pre != predecodedBLPCache_->end()) {
+            // Already decoded on a worker (the creature loader): only the upload is left, and that is cheap.
+            gl_->textures.adopt(path, pre->second);
+            const GLuint id = gl_->textures.get(path);
+            if (id == gl_->textures.white()) return &gl_->white;
+            return gl_->object(path, id);
+        }
     }
-    const auto t0 = std::chrono::steady_clock::now();
-    const GLuint id = gl_->textures.get(path);
-    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    if (ms > 25.0) LOG_WARNING("Character texture '", path, "' took ", ms, " ms", predecodedBLPCache_ ? " (predecode cache set)" : "");
-    if (id == gl_->textures.white()) return &gl_->white;  // a missing file is the white texture, as upstream
-    return gl_->object(path, id);
+    // Not decoded yet. A missing file answers white at once (what a failed load always did, and the shared code reads that as "try
+    // something else"); an existing one is read and decoded on a worker thread, the object draws nothing until update() has uploaded it.
+    // Reading a BLP from the card on the main thread took 25 to 280 ms each and was most of the hitch of a creature appearing.
+    if (!gl_->assets || !gl_->assets->fileExists(path)) return &gl_->white;
+    GpuTexture* object = gl_->object(path, gl_->white.id);
+    object->pending = true;
+    gl_->jobs.fetch_add(1);
+    Gl* gl = gl_.get();
+    pipeline::AssetManager* assets = gl_->assets;
+    core::ThreadPool::ioWorkers().submit([gl, assets, path]() {
+        pipeline::BLPImage image = assets->loadTexture(path, /*keepCompressed=*/true);
+        {
+            std::lock_guard<std::mutex> lock(gl->readyMutex);
+            gl->readyImages.emplace_back(path, std::move(image));
+        }
+        gl->jobs.fetch_sub(1);
+    });
+    return object;
 }
 
 // Phase A has no compositing (VITA-20 phase C): the base layer alone, which is the bare skin of a humanoid.
@@ -462,24 +515,43 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
         }
         models[id] = std::move(gpu);
 
-        // The shared buffer holds the model in its Stand pose (frame 0 of animation 0), skinned once here: bind pose is arms out.
+        // The shared buffer ends up holding the model in its Stand pose (frame 0 of animation 0): the bind pose is arms out. It is
+        // uploaded in the bind pose now and a worker skins the Stand pose (bones and every vertex: up to 185 ms on the main thread),
+        // which update() uploads when it is ready; the model draws nothing until then (Buffers::baked).
         std::vector<Gl::Vertex> verts(model.vertices.size());
         for (std::size_t i = 0; i < verts.size(); ++i) {
             const pipeline::M2Vertex& v = model.vertices[i];
             verts[i] = Gl::Vertex{{v.position.x, v.position.y, v.position.z}, {v.normal.x, v.normal.y, v.normal.z},
                                   {v.texCoords[0].x, v.texCoords[0].y}};
         }
-        bool baked = false;
-        {
-            CharacterInstance tmp;
-            tmp.modelId = id;
-            tmp.currentSequenceIndex = standSequence(model);
-            if (tmp.currentSequenceIndex >= 0 && !model.bones.empty()) {
-                calculateBoneMatrices(tmp);
-                skinVertices(model, tmp.boneMatrices, verts.data(), 0, static_cast<uint32_t>(verts.size()));
-                baked = true;
-            }
+        const int standSeq = standSequence(model);
+        const bool bakeQueued = standSeq >= 0 && !model.bones.empty();
+        if (bakeQueued) {
+            out.buf->baked.store(false);
+            const pipeline::M2Model* md = &models[id].data;  // stable: unloadModelIfUnused keeps a model until its bake is done
+            gl_->jobs.fetch_add(1);
+            Gl* gl = gl_.get();
+            std::shared_ptr<Gl::Buffers> buf = out.buf;
+            core::ThreadPool::frameWorkers().submit([gl, md, standSeq, buf]() {
+                std::vector<glm::mat4> bones;
+                computeBoneMatrices(*md, standSeq, 0.0f, 0.0f, 0.0f, bones);
+                Gl::ReadyBake result;
+                result.buf = buf;
+                result.verts.resize(md->vertices.size());
+                for (std::size_t i = 0; i < result.verts.size(); ++i) {
+                    const pipeline::M2Vertex& v = md->vertices[i];
+                    result.verts[i] = Gl::Vertex{{v.position.x, v.position.y, v.position.z}, {v.normal.x, v.normal.y, v.normal.z},
+                                                 {v.texCoords[0].x, v.texCoords[0].y}};
+                }
+                skinVertices(*md, bones, result.verts.data(), 0, static_cast<uint32_t>(result.verts.size()));
+                {
+                    std::lock_guard<std::mutex> lock(gl->readyMutex);
+                    gl->readyBakes.push_back(std::move(result));
+                }
+                gl->jobs.fetch_sub(1);
+            });
         }
+        const bool baked = bakeQueued;
         glGenBuffers(1, &out.buf->vbo);
         glBindBuffer(GL_ARRAY_BUFFER, out.buf->vbo);
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(Gl::Vertex)), verts.data(), GL_STATIC_DRAW);
@@ -493,7 +565,7 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
         gl_->byFile[key] = id;
         LOG_WARNING("Character model ", id, " '", model.name, "': ", model.vertices.size(), " verts, ", model.indices.size() / 3, " tris, ",
                     model.batches.size(), " batches, ", model.bones.size(), " bones (at most ", maxBones, " in one batch), ",
-                    model.sequences.size(), " sequences, ", model.textures.size(), " textures; stand pose ", baked ? "baked" : "missing",
+                    model.sequences.size(), " sequences, ", model.textures.size(), " textures; stand pose ", baked ? "baking on a worker" : "missing",
                     ", prepare ", msSince(t2), " ms");
     }
     const double uploadMs = msSince(t0);
@@ -520,6 +592,7 @@ void CharacterRenderer::unloadModelIfUnused(uint32_t modelId) {
     }
     auto it = gl_->glModels.find(modelId);
     if (it == gl_->glModels.end()) return;
+    if (!it->second.buf->baked.load()) return;  // a worker is still reading this model's data
     const uint32_t canonical = it->second.canonical;
     gl_->glModels.erase(it);
     // The shared data goes with the last id that points at it.
@@ -757,6 +830,48 @@ bool CharacterRenderer::getInstanceModelName(uint32_t instanceId, std::string& m
 }
 
 void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
+    // Upload what the workers finished (textures read and decoded, Stand poses skinned) within a time budget per frame: GL is
+    // main-thread only, and an upload is the part of a load that cannot move. A few milliseconds a frame keeps the frame rate.
+    if (gl_) {
+        const auto start = std::chrono::steady_clock::now();
+        auto spent = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); };
+        constexpr double kBudgetMs = 3.0;
+        while (spent() < kBudgetMs) {
+            std::pair<std::string, pipeline::BLPImage> image;
+            Gl::ReadyBake bake;
+            bool haveImage = false, haveBake = false;
+            {
+                std::lock_guard<std::mutex> lock(gl_->readyMutex);
+                if (!gl_->readyBakes.empty()) {
+                    bake = std::move(gl_->readyBakes.front());
+                    gl_->readyBakes.pop_front();
+                    haveBake = true;
+                } else if (!gl_->readyImages.empty()) {
+                    image = std::move(gl_->readyImages.front());
+                    gl_->readyImages.pop_front();
+                    haveImage = true;
+                }
+            }
+            if (haveBake) {
+                glBindBuffer(GL_ARRAY_BUFFER, bake.buf->vbo);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(bake.verts.size() * sizeof(Gl::Vertex)), bake.verts.data());
+                bake.buf->baked.store(true);
+                ++gl_->uploadedBakes;
+            } else if (haveImage) {
+                gl_->textures.adopt(image.first, image.second);
+                const GLuint id = gl_->textures.get(image.first);
+                auto obj = gl_->textureObjects.find(image.first);
+                if (obj != gl_->textureObjects.end()) {
+                    if (id != gl_->textures.white()) obj->second->id = id;
+                    obj->second->pending = false;
+                }
+                ++gl_->uploadedTextures;
+            } else {
+                break;
+            }
+        }
+        gl_->uploadMsTotal += spent();
+    }
     // Animations tick within this many yards of the camera; the rest hold their pose (a cost that scales with what is near).
     static const float kAnimRadiusSq = [] {
         const char* v = std::getenv("WOWEE_CHAR_ANIM_RADIUS");
@@ -1118,6 +1233,7 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                 }
             }
             auto ro = animSlot.find(it.id);
+            if (ro == animSlot.end() && !it.mesh->buf->baked.load()) continue;  // the Stand pose is still being skinned on a worker
             const GLuint vbo = ro == animSlot.end() ? it.mesh->buf->vbo
                                                     : gl_->slotVbo[static_cast<std::size_t>(ro->second.second * gl_->maxAnimated + ro->second.first)];
             const std::size_t base = 0;
@@ -1145,6 +1261,7 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                     auto g = extra->groupOverrides.find(group);
                     if (g != extra->groupOverrides.end() && g->second) tex = g->second;
                 }
+                if (tex && tex->pending) continue;  // its image is still being read on a worker
                 const bool hairGeoset = (group >= 1 && group <= 3) || (group == 0 && b.submeshId > 0 && b.submeshId <= 99);
                 const bool hairMaterial = !inst.isSceneModel && (usesTextureType(*it.gm, b, 6) || (hairGeoset && (blendMode != 0 || b.textureCount > 1)));
                 gl::M2Kind kind = blendMode == 0 ? gl::M2Kind::Opaque : (blendMode == 1 ? gl::M2Kind::AlphaTest : gl::M2Kind::Blend);
@@ -1202,7 +1319,7 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
     if (stats.frames == 0) {
         LOG_WARNING("GL memory Characters: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), " (RGBA ", gl_->textures.rgbaBytes() / 1024, " KB in ", gl_->textures.rgbaCount(), ")", ", buffers ",
                     gl_->gpuBytes / 1024, " KB, models ", gl_->glModels.size(), ", instances ", instances.size(), " (", gl_->visible,
-                    " in range, ", items.size(), " drawn); animated ", gl_->skinFrames ? static_cast<double>(gl_->animatedNow) / gl_->skinFrames : 0.0,
+                    " in range, ", items.size(), " drawn); worker loads uploaded: ", gl_->uploadedTextures, " textures, ", gl_->uploadedBakes, " poses (", gl_->uploadMsTotal, " ms of update time in all); animated ", gl_->skinFrames ? static_cast<double>(gl_->animatedNow) / gl_->skinFrames : 0.0,
                     " a frame, animation ", gl_->skinFrames ? gl_->totalMs / gl_->skinFrames : 0.0, " ms (bones ", gl_->skinFrames ? gl_->boneMs / gl_->skinFrames : 0.0,
                     ", skin ", gl_->skinFrames ? gl_->skinMs / gl_->skinFrames : 0.0,
                     ", upload ", gl_->skinFrames ? gl_->uploadMs / gl_->skinFrames : 0.0, " in ", gl_->skinFrames ? static_cast<double>(gl_->rangeCalls) / gl_->skinFrames : 0.0, " calls) and ",

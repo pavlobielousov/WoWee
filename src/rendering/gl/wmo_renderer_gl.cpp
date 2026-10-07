@@ -17,6 +17,7 @@
 #include <vitaGL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <chrono>
 #include <malloc.h>
@@ -69,6 +70,7 @@ struct WMORenderer::Gl {
         bool setupDone = false;
         std::string sourcePath;   // to parse it again for collision
         int collision = 0;        // 0 none, 1 being built, 2 in loadedModels
+        unsigned retryTick = 0;   // after a build that ran out of heap: not before this collisionTick
     };
     struct Instance {
         uint32_t model = 0;
@@ -114,6 +116,7 @@ bool WMORenderer::glInitialize(pipeline::AssetManager* assets) {
     gl_ = std::make_unique<Gl>();
     gl_->assets = assets;
     gl_->textures.setAssetManager(assets);
+    gl_->textures.setAsync(true);  // BLPs are read on a worker; get() answers with a placeholder name (gl_texture.hpp)
     {
         // Building textures are capped at 128 on a side by default (WOWEE_WMO_TEXTURE_MAX in env.txt, 0 = keep all; each halving
         // of the cap takes three quarters of the memory of the textures above it: VITA-20 measured 128 on the device).
@@ -370,6 +373,9 @@ std::unique_ptr<WMORenderer::ModelData> WMORenderer::Gl::buildCollisionModel(pip
 extern "C" int _newlib_heap_size_user;
 #endif
 
+// Set by a collision build that gave up for lack of heap (not for being too big): the building is tried again later.
+static std::atomic<bool> g_collisionFailedForMemory{false};
+
 // Free heap, from the allocator (the heap is a fixed 288 MB block on the Vita).
 static std::size_t freeHeapBytes() {
 #ifdef __vita__
@@ -384,11 +390,15 @@ static std::size_t freeHeapBytes() {
 std::unique_ptr<WMORenderer::ModelData> WMORenderer::Gl::buildCollisionModelUnchecked(pipeline::AssetManager* assets, const std::string& path, uint32_t id) {
     auto md = std::make_unique<WMORenderer::ModelData>();
     if (!assets || path.empty()) return md;
-    constexpr std::size_t kNeedAtStart = 60u * 1024 * 1024;   // do not begin a building with less free heap than this
+    // 32 MB: the 60 MB this was with the 288 MB heap skipped the blacksmith and the inn of Goldshire at world entry once the heap was
+    // 256 MB (about 200 MB in use there), and they stayed walk-through for the session (VITA-20). A building is parsed one group at a
+    // time and the build gives up below kStopBelow, so a smaller head start is safe.
+    constexpr std::size_t kNeedAtStart = 32u * 1024 * 1024;   // do not begin a building with less free heap than this
     constexpr std::size_t kStopBelow = 25u * 1024 * 1024;     // give up mid-way rather than run the heap out
     constexpr std::size_t kMaxTriangles = 90000;              // Stormwind has 730k: a city needs its own plan, not a grid per triangle
     if (freeHeapBytes() < kNeedAtStart) {
-        LOG_WARNING("WMO collision for ", path, " skipped: only ", freeHeapBytes() / (1024 * 1024), " MB of heap free");
+        LOG_WARNING("WMO collision for ", path, " skipped: only ", freeHeapBytes() / (1024 * 1024), " MB of heap free (will try again)");
+        g_collisionFailedForMemory.store(true);
         return md;
     }
     const std::vector<uint8_t> data = assets->readFile(path);
@@ -427,7 +437,8 @@ std::unique_ptr<WMORenderer::ModelData> WMORenderer::Gl::buildCollisionModelUnch
         }
         if (freeHeapBytes() < kStopBelow) {
             LOG_WARNING("WMO collision for ", path, " stopped at group ", gi, " of ", model.nGroups, ": ", freeHeapBytes() / (1024 * 1024),
-                        " MB of heap free");
+                        " MB of heap free (will try again)");
+            g_collisionFailedForMemory.store(true);
             return std::make_unique<WMORenderer::ModelData>();
         }
     }
@@ -482,7 +493,11 @@ void WMORenderer::glUpdateCollision(const glm::vec3& focus) {
                 LOG_WARNING("WMO collision built for model ", id, ": ", loadedModels[id].groups.size(), " groups, ", tris, " triangles");
             } else {
                 mit->second.collision = 0;
-                mit->second.sourcePath.clear();  // could not be built: do not retry every time
+                if (g_collisionFailedForMemory.exchange(false)) {
+                    mit->second.retryTick = gl_->collisionTick + 600;  // out of heap right now: the next try is in about 20 seconds
+                } else {
+                    mit->second.sourcePath.clear();  // could not be built: do not retry every time
+                }
             }
         }
     }
@@ -511,6 +526,7 @@ void WMORenderer::glUpdateCollision(const glm::vec3& focus) {
     for (const WMOInstance& wi : instances) {
         auto mit = gl_->models.find(wi.modelId);
         if (mit == gl_->models.end() || mit->second.collision != 0 || mit->second.sourcePath.empty()) continue;
+        if (gl_->collisionTick < mit->second.retryTick) continue;
         const float d = boxDistance(focus, wi.worldBoundsMin, wi.worldBoundsMax);
         if (d < best) { best = d; bestModel = wi.modelId; }
     }
@@ -626,6 +642,7 @@ void WMORenderer::resetQueryStats() {
 uint32_t WMORenderer::glInstanceCount() const { return gl_ ? static_cast<uint32_t>(gl_->instances.size()) : 0; }
 
 void WMORenderer::glRender(const gl::SceneParams& scene) {
+    if (gl_) gl_->textures.pump(2.0);
     if (!glReady() || gl_->instances.empty()) return;
     static gl::FrameStats stats("WMO");
     stats.begin();
