@@ -11,6 +11,7 @@
 #include "rendering/frustum.hpp"
 #include "rendering/gl/gl_program.hpp"
 #include "rendering/gl/gl_stats.hpp"
+#include "rendering/gl/character_composite.hpp"
 #include "rendering/gl/gl_texture.hpp"
 #include "rendering/gl/shader_sources.hpp"
 #include "rendering/m2_track_sampler.hpp"
@@ -43,6 +44,7 @@ class GpuTexture {
 public:
     GLuint id = 0;
     bool pending = false;  // being read and decoded on a worker: draws nothing yet (white would flash on a textured character)
+    GpuTexture* fallback = nullptr;  // what a pending texture draws as until it is ready (the composite it replaces), if there is one
 };
 
 namespace gl {
@@ -119,6 +121,13 @@ struct CharacterRenderer::Gl {
         std::vector<Vertex> verts;
     };
     std::deque<ReadyBake> readyBakes;
+    struct ReadyComposite {
+        std::string key;
+        gl::CompositeResult result;
+    };
+    std::deque<ReadyComposite> readyComposites;
+    std::vector<GLuint> compositeTextures;  // the GL textures of finished composites (not in `textures`): deleted with the renderer
+    int textureCap = 256;
     std::atomic<int> jobs{0};  // submitted and not finished: clear() waits for them (they point into the models)
     long uploadedTextures = 0, uploadedBakes = 0;
     double uploadMsTotal = 0.0;
@@ -299,7 +308,8 @@ bool CharacterRenderer::glInitialize(pipeline::AssetManager* assets) {
     {
         // Character skins are 256 on a side or less; a cap keeps the odd 512 or 1024 texture from taking the GPU pools.
         const char* v = std::getenv("WOWEE_CHAR_TEXTURE_MAX");
-        gl_->textures.setMaxDimension(v ? std::atoi(v) : 256);
+        gl_->textureCap = v ? std::atoi(v) : 256;
+        gl_->textures.setMaxDimension(gl_->textureCap);
         if (const char* n = std::getenv("WOWEE_CHAR_MAX")) gl_->maxDrawn = std::clamp(std::atoi(n), 0, 200);
         if (const char* a = std::getenv("WOWEE_CHAR_ANIM_MAX")) gl_->maxAnimated = std::clamp(std::atoi(a), 0, 32);
         if (const char* r = std::getenv("WOWEE_CHAR_ANIM_DIST")) gl_->animRange = std::clamp(static_cast<float>(std::atof(r)), 5.0f, 100.0f);
@@ -368,7 +378,10 @@ void CharacterRenderer::clear() {
         std::lock_guard<std::mutex> lock(gl_->readyMutex);
         gl_->readyImages.clear();
         gl_->readyBakes.clear();
+        gl_->readyComposites.clear();
     }
+    if (!gl_->compositeTextures.empty()) glDeleteTextures(static_cast<GLsizei>(gl_->compositeTextures.size()), gl_->compositeTextures.data());
+    gl_->compositeTextures.clear();
     gl_->glModels.clear();
     gl_->byFile.clear();
     gl_->extras.clear();
@@ -414,14 +427,65 @@ GpuTexture* CharacterRenderer::loadTexture(const std::string& path) {
     return object;
 }
 
-// Phase A has no compositing (VITA-20 phase C): the base layer alone, which is the bare skin of a humanoid.
-GpuTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& layerPaths) {
-    return layerPaths.empty() ? nullptr : loadTexture(layerPaths.front());
+// A character's skin atlas: the base skin, face and underwear overlays and the equipment regions blended into one texture. The blending
+// (character_composite.cpp, upstream's) runs on a worker; update() uploads the result. The object returned is a pending texture until then,
+// drawing what it replaces (setTextureSlotOverride) or nothing.
+static std::string normalizeLayerKey(std::string key) {
+    std::replace(key.begin(), key.end(), '/', '\\');
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return key;
 }
 
-GpuTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath, [[maybe_unused]] const std::vector<std::string>& baseLayers,
-                                                    [[maybe_unused]] const std::vector<std::pair<int, std::string>>& regionLayers) {
-    return loadTexture(basePath);
+GpuTexture* CharacterRenderer::compositeWithRegions(const std::string& basePath, const std::vector<std::string>& baseLayers,
+                                                    const std::vector<std::pair<int, std::string>>& regionLayers) {
+    if (!glReady() || !gl_->assets || basePath.empty()) return nullptr;
+    std::string key = "__composite__" + basePath;
+    for (const auto& bl : baseLayers) { key += '|'; key += bl; }
+    key += '#';
+    for (const auto& rl : regionLayers) { key += std::to_string(rl.first); key += ':'; key += rl.second; key += ','; }
+    auto have = gl_->textureObjects.find(key);
+    if (have != gl_->textureObjects.end()) return have->second.get();
+
+    // Images the creature loader already decoded are handed to the worker (they are moved out of the cache, as upstream does).
+    auto locals = std::make_shared<std::unordered_map<std::string, pipeline::BLPImage>>();
+    auto take = [&](const std::string& path) {
+        if (!predecodedBLPCache_ || path.empty()) return;
+        auto it = predecodedBLPCache_->find(normalizeLayerKey(path));
+        if (it != predecodedBLPCache_->end() && it->second.isValid() && !it->second.data.empty()) {
+            (*locals)[normalizeLayerKey(path)] = std::move(it->second);
+            predecodedBLPCache_->erase(it);
+        }
+    };
+    take(basePath);
+    for (const auto& bl : baseLayers) take(bl);
+    for (const auto& rl : regionLayers) take(rl.second);
+
+    GpuTexture* object = gl_->object(key, gl_->white.id);
+    object->pending = true;
+    gl_->jobs.fetch_add(1);
+    Gl* gl = gl_.get();
+    pipeline::AssetManager* assets = gl_->assets;
+    core::ThreadPool::ioWorkers().submit([gl, assets, key, basePath, baseLayers, regionLayers, locals]() {
+        auto load = [&](const std::string& path) -> pipeline::BLPImage {
+            auto it = locals->find(normalizeLayerKey(path));
+            if (it != locals->end()) return std::move(it->second);
+            return assets->loadTexture(path);  // decoded RGBA, not the block-compressed form
+        };
+        Gl::ReadyComposite ready;
+        ready.key = key;
+        ready.result = gl::compositeCharacterSkin(basePath, baseLayers, regionLayers, load);
+        {
+            std::lock_guard<std::mutex> lock(gl->readyMutex);
+            gl->readyComposites.push_back(std::move(ready));
+        }
+        gl->jobs.fetch_sub(1);
+    });
+    return object;
+}
+
+GpuTexture* CharacterRenderer::compositeTextures(const std::vector<std::string>& layerPaths) {
+    if (layerPaths.empty()) return nullptr;
+    return compositeWithRegions(layerPaths.front(), std::vector<std::string>(layerPaths.begin() + 1, layerPaths.end()), {});
 }
 
 void CharacterRenderer::clearCompositeCache() { }
@@ -436,7 +500,11 @@ void CharacterRenderer::setModelTexture(uint32_t modelId, uint32_t textureSlot, 
 }
 
 void CharacterRenderer::setTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot, GpuTexture* texture) {
-    if (gl_ && instances.count(instanceId)) gl_->extras[instanceId].slotOverrides[textureSlot] = texture;
+    if (!gl_ || !instances.count(instanceId)) return;
+    auto& slot = gl_->extras[instanceId].slotOverrides[textureSlot];
+    // A composite still being blended on a worker draws the one it replaces, so an equipment change does not blink the body.
+    if (texture && texture->pending && !texture->fallback && slot && slot != texture && !slot->pending) texture->fallback = slot;
+    slot = texture;
 }
 
 void CharacterRenderer::clearTextureSlotOverride(uint32_t instanceId, uint16_t textureSlot) {
@@ -839,13 +907,18 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
         while (spent() < kBudgetMs) {
             std::pair<std::string, pipeline::BLPImage> image;
             Gl::ReadyBake bake;
-            bool haveImage = false, haveBake = false;
+            Gl::ReadyComposite composite;
+            bool haveImage = false, haveBake = false, haveComposite = false;
             {
                 std::lock_guard<std::mutex> lock(gl_->readyMutex);
                 if (!gl_->readyBakes.empty()) {
                     bake = std::move(gl_->readyBakes.front());
                     gl_->readyBakes.pop_front();
                     haveBake = true;
+                } else if (!gl_->readyComposites.empty()) {
+                    composite = std::move(gl_->readyComposites.front());
+                    gl_->readyComposites.pop_front();
+                    haveComposite = true;
                 } else if (!gl_->readyImages.empty()) {
                     image = std::move(gl_->readyImages.front());
                     gl_->readyImages.pop_front();
@@ -857,6 +930,25 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
                 glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(bake.verts.size() * sizeof(Gl::Vertex)), bake.verts.data());
                 bake.buf->baked.store(true);
                 ++gl_->uploadedBakes;
+            } else if (haveComposite) {
+                auto obj = gl_->textureObjects.find(composite.key);
+                if (obj != gl_->textureObjects.end()) {
+                    if (composite.result.ok) {
+                        pipeline::BLPImage img;
+                        img.width = composite.result.width;
+                        img.height = composite.result.height;
+                        img.channels = 4;
+                        img.data = std::move(composite.result.rgba);
+                        const gl::GlTexture tex = gl::uploadBlp(img, 0, false, gl_->textureCap);
+                        if (tex.id != 0) {
+                            obj->second->id = tex.id;
+                            gl_->compositeTextures.push_back(tex.id);
+                        }
+                    }
+                    obj->second->pending = false;
+                    obj->second->fallback = nullptr;
+                }
+                ++gl_->uploadedTextures;
             } else if (haveImage) {
                 gl_->textures.adopt(image.first, image.second);
                 const GLuint id = gl_->textures.get(image.first);
@@ -1261,7 +1353,12 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                     auto g = extra->groupOverrides.find(group);
                     if (g != extra->groupOverrides.end() && g->second) tex = g->second;
                 }
-                if (tex && tex->pending) continue;  // its image is still being read on a worker
+                GLuint drawTexture = tex ? tex->id : white->id;
+                if (tex && tex->pending) {
+                    // Its image is still being read or blended on a worker: the texture it replaces if there is one, else nothing yet.
+                    if (tex->fallback && !tex->fallback->pending) drawTexture = tex->fallback->id;
+                    else continue;
+                }
                 const bool hairGeoset = (group >= 1 && group <= 3) || (group == 0 && b.submeshId > 0 && b.submeshId <= 99);
                 const bool hairMaterial = !inst.isSceneModel && (usesTextureType(*it.gm, b, 6) || (hairGeoset && (blendMode != 0 || b.textureCount > 1)));
                 gl::M2Kind kind = blendMode == 0 ? gl::M2Kind::Opaque : (blendMode == 1 ? gl::M2Kind::AlphaTest : gl::M2Kind::Blend);
@@ -1301,7 +1398,7 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                 glUniform2f(u.lit, unlit ? 0.0f : 1.0f, 1.0f);
                 const float fogToColour = (blendMode == 3 || blendMode == 4 || blendMode == 6) ? 0.0f : 1.0f;
                 glUniform4f(u.params, 0.5f, 0.0f, inst.opacity, fogToColour);
-                const GLuint texId = tex ? tex->id : white->id;
+                const GLuint texId = drawTexture;
                 if (boundTexture != texId) {
                     boundTexture = texId;
                     glBindTexture(GL_TEXTURE_2D, texId);

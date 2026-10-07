@@ -5132,11 +5132,6 @@ void Application::setupUICallbacks() {
 void Application::spawnPlayerCharacter() {
     if (playerCharacterSpawned) return;
     if (!renderer || !renderer->getCharacterRenderer() || !renderer->getCamera()) return;
-#ifdef __vita__
-    // VITA-20 phase C: the player's model, its composed skin and the camera hand-over are not done. Until they are, the
-    // renderer's position-only character (Renderer::update) carries the camera, as it did before characters were drawn.
-    return;
-#endif
 
     auto* charRenderer = renderer->getCharacterRenderer();
     auto* camera = renderer->getCamera();
