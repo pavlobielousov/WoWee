@@ -119,7 +119,10 @@ struct CharacterRenderer::Gl {
     struct ReadyBake {
         std::shared_ptr<Buffers> buf;
         std::vector<Vertex> verts;
+        std::vector<glm::mat4> bones;  // the Stand pose's bone matrices: where attached items sit on a character that is not being skinned
+        uint32_t canonical = 0;
     };
+    std::unordered_map<uint32_t, std::vector<glm::mat4>> standBones;  // by canonical model id
     std::deque<ReadyBake> readyBakes;
     struct ReadyComposite {
         std::string key;
@@ -277,6 +280,14 @@ static void computeBoneMatrices(const pipeline::M2Model& model, int sequence, fl
         if (bone.parentBone >= 0 && static_cast<std::size_t>(bone.parentBone) < i) out[i] = out[static_cast<std::size_t>(bone.parentBone)] * local;
         else out[i] = local;
     }
+}
+
+// The bones an instance stands on: its own when it is being skinned, the Stand pose's otherwise (a template: CharacterInstance is private).
+template <class Instance>
+static const std::vector<glm::mat4>* bonesOf(const Instance& inst, const std::unordered_map<uint32_t, std::vector<glm::mat4>>& standBones) {
+    if (!inst.boneMatrices.empty()) return &inst.boneMatrices;
+    auto it = standBones.find(inst.modelId);
+    return it == standBones.end() ? nullptr : &it->second;
 }
 
 void CharacterRenderer::calculateBoneMatrices(CharacterInstance& instance) {
@@ -600,11 +611,13 @@ bool CharacterRenderer::loadModel(const pipeline::M2Model& model, uint32_t id) {
             gl_->jobs.fetch_add(1);
             Gl* gl = gl_.get();
             std::shared_ptr<Gl::Buffers> buf = out.buf;
-            core::ThreadPool::frameWorkers().submit([gl, md, standSeq, buf]() {
+            core::ThreadPool::frameWorkers().submit([gl, md, standSeq, buf, id]() {
                 std::vector<glm::mat4> bones;
                 computeBoneMatrices(*md, standSeq, 0.0f, 0.0f, 0.0f, bones);
                 Gl::ReadyBake result;
                 result.buf = buf;
+                result.bones = bones;
+                result.canonical = id;
                 result.verts.resize(md->vertices.size());
                 for (std::size_t i = 0; i < result.verts.size(); ++i) {
                     const pipeline::M2Vertex& v = md->vertices[i];
@@ -702,8 +715,14 @@ uint32_t CharacterRenderer::createInstance(uint32_t modelId, const glm::vec3& po
 }
 
 void CharacterRenderer::removeInstance(uint32_t instanceId) {
+    auto it = instances.find(instanceId);
+    if (it == instances.end()) return;
+    // What is attached goes with it (weapons, helms, shoulders; each attach made its own model id, so those go too).
+    const std::vector<WeaponAttachment> attachments = it->second.weaponAttachments;
+    for (const WeaponAttachment& wa : attachments) removeInstance(wa.weaponInstanceId);
     instances.erase(instanceId);
     if (gl_) gl_->extras.erase(instanceId);
+    for (const WeaponAttachment& wa : attachments) unloadModelIfUnused(wa.weaponModelId);
 }
 
 void CharacterRenderer::setInstancePosition(uint32_t instanceId, const glm::vec3& position) {
@@ -929,6 +948,7 @@ void CharacterRenderer::update(float deltaTime, const glm::vec3& cameraPos) {
                 glBindBuffer(GL_ARRAY_BUFFER, bake.buf->vbo);
                 glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(bake.verts.size() * sizeof(Gl::Vertex)), bake.verts.data());
                 bake.buf->baked.store(true);
+                if (!bake.bones.empty()) gl_->standBones[bake.canonical] = std::move(bake.bones);
                 ++gl_->uploadedBakes;
             } else if (haveComposite) {
                 auto obj = gl_->textureObjects.find(composite.key);
@@ -1094,6 +1114,9 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
         const M2ModelGPU* gm;
         const Gl::Model* mesh;
         float dist;
+        glm::mat4 matrix{1.0f};  // attached items only: where the bone of their parent puts them
+        bool attached = false;
+        float opacity = 1.0f;
     };
     std::vector<Item> items;
     const float reach = std::min(gl_->reach, scene.fogEnd);
@@ -1221,6 +1244,36 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
         gl_->animatedNow += static_cast<long>(animSlot.size());
         ++gl_->skinFrames;
     }
+    // What is attached to the characters about to be drawn (weapons, helms, shoulders): placed on a bone of the parent, drawn with it.
+    {
+        const std::size_t parents = items.size();
+        for (std::size_t pi = 0; pi < parents; ++pi) {
+            const Item parent = items[pi];
+            const CharacterInstance& pinst = *parent.inst;
+            if (pinst.weaponAttachments.empty()) continue;
+            // The bones of what the body shows: its own while it is being skinned (the slots), the Stand pose's when it is not.
+            const std::vector<glm::mat4>* bones = nullptr;
+            if (animSlot.count(parent.id) && !pinst.boneMatrices.empty()) bones = &pinst.boneMatrices;
+            else if (auto sb = gl_->standBones.find(pinst.modelId); sb != gl_->standBones.end()) bones = &sb->second;
+            if (!bones) continue;  // its Stand pose is not ready: nothing to hang the items on yet
+            const glm::mat4 charMat = getModelMatrix(pinst);
+            for (const WeaponAttachment& wa : pinst.weaponAttachments) {
+                auto wi = instances.find(wa.weaponInstanceId);
+                if (wi == instances.end() || !wi->second.visible) continue;
+                auto mit = models.find(wi->second.modelId);
+                auto ex = gl_->extras.find(wa.weaponInstanceId);
+                if (mit == models.end() || ex == gl_->extras.end()) continue;
+                auto git = gl_->glModels.find(ex->second.texModel);
+                if (git == gl_->glModels.end()) continue;
+                const glm::mat4 boneMat = wa.boneIndex < bones->size() ? (*bones)[wa.boneIndex] : glm::mat4(1.0f);
+                Item w{wa.weaponInstanceId, &wi->second, &mit->second, &git->second, parent.dist};
+                w.matrix = charMat * boneMat * glm::translate(glm::mat4(1.0f), wa.offset) * wa.localTransform;
+                w.attached = true;
+                w.opacity = pinst.opacity;
+                items.push_back(w);
+            }
+        }
+    }
     // Draw in model order: fewer buffer binds (a street of guards is one model).
     std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.mesh->buf < b.mesh->buf; });
 
@@ -1329,7 +1382,8 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
             const GLuint vbo = ro == animSlot.end() ? it.mesh->buf->vbo
                                                     : gl_->slotVbo[static_cast<std::size_t>(ro->second.second * gl_->maxAnimated + ro->second.first)];
             const std::size_t base = 0;
-            const glm::mat4 matrix = getModelMatrix(inst);
+            const glm::mat4 matrix = it.attached ? it.matrix : getModelMatrix(inst);
+            const float opacity = it.attached ? it.opacity : inst.opacity;
             bool matrixSet[3] = {false, false, false};
 
             for (std::size_t bi : it.gm->sortedBatchIndices) {
@@ -1340,6 +1394,7 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                     blendMode = data.materials[b.materialIndex].blendMode;
                     flags = data.materials[b.materialIndex].flags;
                 }
+                if (it.attached && blendMode >= 3) continue;  // an item's glow and flame batches are effects, which are not drawn yet
                 if ((blendMode >= 2) != (pass == 1)) continue;
                 if (filter) {
                     if (!inst.activeGeosets.count(b.submeshId)) continue;
@@ -1397,7 +1452,7 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
                 const bool unlit = (flags & 0x01) != 0 || blendMode >= 3;
                 glUniform2f(u.lit, unlit ? 0.0f : 1.0f, 1.0f);
                 const float fogToColour = (blendMode == 3 || blendMode == 4 || blendMode == 6) ? 0.0f : 1.0f;
-                glUniform4f(u.params, 0.5f, 0.0f, inst.opacity, fogToColour);
+                glUniform4f(u.params, 0.5f, 0.0f, opacity, fogToColour);
                 const GLuint texId = drawTexture;
                 if (boundTexture != texId) {
                     boundTexture = texId;
@@ -1427,16 +1482,141 @@ void CharacterRenderer::glRender(const gl::SceneParams& scene) {
     }
 }
 
-// What the Vita draws no part of yet (weapons, helms and effects arrive with VITA-20 phase D).
+// ---- items attached to a character (weapons, helms, shoulders; VITA-20 phase D) ----
+// An attached item is an instance of its own model with no position of its own: each frame glRender places it on a bone of the character
+// it is attached to (charModel * bone * T(offset) * localTransform) and draws it with that character. Upstream's calls, the same meaning.
 
-bool CharacterRenderer::attachWeapon([[maybe_unused]] uint32_t charInstanceId, [[maybe_unused]] uint32_t attachmentId, [[maybe_unused]] const pipeline::M2Model& weaponModel, [[maybe_unused]] uint32_t weaponModelId, [[maybe_unused]] const std::string& texturePath, [[maybe_unused]] const glm::mat4& localTransform) { return false; }
+bool CharacterRenderer::findAttachmentBone(uint32_t modelId, uint32_t attachmentId, uint16_t& outBoneIndex, glm::vec3& outOffset) const {
+    auto modelIt = models.find(modelId);
+    if (modelIt == models.end()) return false;
+    const auto& model = modelIt->second.data;
+    outBoneIndex = 0;
+    outOffset = glm::vec3(0.0f);
+    bool found = false;
+    if (attachmentId < model.attachmentLookup.size()) {
+        const uint16_t attIdx = model.attachmentLookup[attachmentId];
+        if (attIdx < model.attachments.size()) {
+            outBoneIndex = model.attachments[attIdx].bone;
+            outOffset = model.attachments[attIdx].position;
+            found = true;
+        }
+    }
+    if (!found) {
+        for (const auto& att : model.attachments) {
+            if (att.id == attachmentId) {
+                outBoneIndex = att.bone;
+                outOffset = att.position;
+                found = true;
+                break;
+            }
+        }
+    }
+    // Weapon hands (attachment 1 right, 2 left): the key bones, when a model does not list the attachment.
+    if (!found && (attachmentId == 1 || attachmentId == 2)) {
+        const int32_t targetKeyBone = (attachmentId == 1) ? 26 : 27;
+        for (std::size_t i = 0; i < model.bones.size(); ++i) {
+            if (model.bones[i].keyBoneId == targetKeyBone) {
+                outBoneIndex = static_cast<uint16_t>(i);
+                found = true;
+                break;
+            }
+        }
+    }
+    if (!found && attachmentId == 11 && !model.bones.empty()) {  // the head: bone 0 when the attachment is not defined
+        outBoneIndex = 0;
+        found = true;
+    }
+    if (found && outBoneIndex >= model.bones.size()) found = false;
+    return found;
+}
+
+bool CharacterRenderer::attachWeapon(uint32_t charInstanceId, uint32_t attachmentId, const pipeline::M2Model& weaponModel, uint32_t weaponModelId,
+                                     const std::string& texturePath, const glm::mat4& localTransform) {
+    if (!glReady()) return false;
+    auto charIt = instances.find(charInstanceId);
+    if (charIt == instances.end()) return false;
+    CharacterInstance& charInstance = charIt->second;
+    uint16_t boneIndex = 0;
+    glm::vec3 offset(0.0f);
+    if (!findAttachmentBone(charInstance.modelId, attachmentId, boneIndex, offset)) {
+        LOG_WARNING("attachWeapon: no bone found for attachment ", attachmentId);
+        return false;
+    }
+    detachWeapon(charInstanceId, attachmentId);  // what is there goes first
+
+    if (!gl_->glModels.count(weaponModelId) && !loadModel(weaponModel, weaponModelId)) {
+        LOG_WARNING("attachWeapon: failed to load weapon model ", weaponModelId);
+        return false;
+    }
+    if (!texturePath.empty()) {
+        GpuTexture* tex = loadTexture(texturePath);
+        if (tex && tex != &gl_->white) {
+            // Item models keep an authored texture in slot 0 and expose the chosen skin through the replaceable slots: 2 = object
+            // skin, 3 = weapon blade, 4 = weapon handle (upstream's rule). Simple models have one unnamed slot.
+            bool replaced = false;
+            if (const pipeline::M2Model* md = getModelData(weaponModelId)) {
+                for (uint32_t slot = 0; slot < md->textures.size(); ++slot) {
+                    const uint32_t type = md->textures[slot].type;
+                    if (type == 2 || type == 3 || type == 4) {
+                        setModelTexture(weaponModelId, slot, tex);
+                        replaced = true;
+                    }
+                }
+            }
+            if (!replaced) setModelTexture(weaponModelId, 0, tex);
+        }
+    }
+    const uint32_t weaponInstanceId = createInstance(weaponModelId, glm::vec3(0.0f));
+    if (weaponInstanceId == 0) return false;
+    auto weapIt = instances.find(weaponInstanceId);
+    if (weapIt != instances.end()) {
+        weapIt->second.hasOverrideModelMatrix = true;  // placed by its parent, not by a position of its own
+        weapIt->second.opacity = charInstance.opacity;
+    }
+    WeaponAttachment wa;
+    wa.weaponModelId = weaponModelId;
+    wa.weaponInstanceId = weaponInstanceId;
+    wa.attachmentId = attachmentId;
+    wa.boneIndex = boneIndex;
+    wa.offset = offset;
+    wa.localTransform = localTransform;
+    charInstance.weaponAttachments.push_back(wa);
+    return true;
+}
+
+void CharacterRenderer::detachWeapon(uint32_t charInstanceId, uint32_t attachmentId) {
+    auto charIt = instances.find(charInstanceId);
+    if (charIt == instances.end()) return;
+    auto& attachments = charIt->second.weaponAttachments;
+    for (auto it = attachments.begin(); it != attachments.end(); ++it) {
+        if (it->attachmentId != attachmentId) continue;
+        const uint32_t modelId = it->weaponModelId, instanceId = it->weaponInstanceId;
+        attachments.erase(it);
+        removeInstance(instanceId);
+        unloadModelIfUnused(modelId);  // each attach made its own model id
+        return;
+    }
+}
 
 bool CharacterRenderer::attachWeaponEffect([[maybe_unused]] uint32_t charInstanceId, [[maybe_unused]] uint32_t attachmentId, [[maybe_unused]] uint32_t visualSlot, [[maybe_unused]] const pipeline::M2Model& effectModel, [[maybe_unused]] uint32_t effectModelId) { return false; }
 
-void CharacterRenderer::detachWeapon([[maybe_unused]] uint32_t charInstanceId, [[maybe_unused]] uint32_t attachmentId) { }
-
 void CharacterRenderer::detachWeaponEffects([[maybe_unused]] uint32_t charInstanceId, [[maybe_unused]] uint32_t attachmentId) { }
 
-bool CharacterRenderer::getAttachmentTransform([[maybe_unused]] uint32_t instanceId, [[maybe_unused]] uint32_t attachmentId, [[maybe_unused]] glm::mat4& outTransform) { return false; }
+bool CharacterRenderer::getAttachmentTransform(uint32_t instanceId, uint32_t attachmentId, glm::mat4& outTransform) {
+    if (!gl_) return false;
+    auto instIt = instances.find(instanceId);
+    if (instIt == instances.end()) return false;
+    const CharacterInstance& instance = instIt->second;
+    uint16_t boneIndex = 0;
+    glm::vec3 offset(0.0f);
+    if (!findAttachmentBone(instance.modelId, attachmentId, boneIndex, offset)) return false;
+    glm::mat4 boneMat(1.0f);
+    if (const std::vector<glm::mat4>* bones = bonesOf(instance, gl_->standBones)) {
+        if (boneIndex < bones->size()) boneMat = (*bones)[boneIndex];
+    }
+    const glm::mat4 modelMat = instance.hasOverrideModelMatrix ? instance.overrideModelMatrix : getModelMatrix(instance);
+    outTransform = modelMat * boneMat * glm::translate(glm::mat4(1.0f), offset);
+    return true;
+}
 
 }  // namespace wowee::rendering

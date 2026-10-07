@@ -702,6 +702,11 @@ private:
     // advanced the counter - attachWeapon then instanced an NPC mesh as the
     // weapon. Reserve a range no displayId can reach.
     uint32_t nextWeaponModelId_ = 0x40000000u;
+#ifdef __vita__
+    // VITA-20: an NPC weapon's M2 is read and parsed on a worker (200 to 800 ms on the card, on the main thread: the stutter of every
+    // crossroads). The first attach attempt for a weapon starts the read and answers "not yet"; the retry that follows attaches it.
+    std::unordered_map<std::string, std::shared_future<std::shared_ptr<pipeline::M2Model>>> weaponM2Cache_;
+#endif
 
     // --- Spawn internal methods ---
     void spawnOnlineCreature(uint64_t guid, uint32_t displayId,

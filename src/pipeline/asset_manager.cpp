@@ -217,10 +217,31 @@ std::string AssetManager::resolveFile(const std::string& normalizedPath) const {
     std::string looseCandidate = normalizedPath;
     std::replace(looseCandidate.begin(), looseCandidate.end(), '\\', '/');
     looseCandidate = dataPath + "/" + looseCandidate;
+#ifdef __vita__
+    // A path that is not in the manifest costs a stat() of the memory card on every question, and the card is one queue: while worker
+    // threads stream reads, each stat from the main thread waited 100 to 500 ms (found with the 0.5 s `streamTiles`: it asked for tiles
+    // that were out of reach every pass). A file that was not there stays not there for the session, so the answer is remembered
+    // (VITA-20).
+    static std::mutex missMutex;
+    static std::unordered_set<std::string> missing;
+    {
+        std::lock_guard<std::mutex> lock(missMutex);
+        if (missing.count(looseCandidate)) return {};
+    }
+    if (LooseFileReader::fileExists(looseCandidate)) {
+        return looseCandidate;
+    }
+    {
+        std::lock_guard<std::mutex> lock(missMutex);
+        if (missing.size() < 200000) missing.insert(looseCandidate);
+    }
+    return {};
+#else
     if (LooseFileReader::fileExists(looseCandidate)) {
         return looseCandidate;
     }
     return {};
+#endif
 }
 
 bool AssetManager::setBaseFallbackPath(const std::string& basePath,
