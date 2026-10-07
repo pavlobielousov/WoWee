@@ -13,6 +13,7 @@
 #include "rendering/gl/shader_selftest.hpp"
 #include "rendering/camera.hpp"
 #include "rendering/camera_controller.hpp"
+#include "rendering/animation/animation_ids.hpp"
 #include "rendering/character_preview.hpp"
 #include "rendering/character_renderer.hpp"
 #include "rendering/footprint_renderer.hpp"
@@ -77,12 +78,14 @@
 
 namespace wowee::rendering {
 
+namespace gl { extern bool g_charNoAnim, g_charAnimAll, g_m2WhereRequest; }
+
 namespace {
 // Live profiling switches (VITA-19): ux0:data/wowee/gl.cfg is read every 60 frames, words in it: noterrain nowmo nom2 and
 // scale=<0.2..1> (the 3D viewport as a fraction of the screen, to tell fill rate from draw-call cost). Delete the file to
 // reset. A diagnostic only; the file is not there in normal use.
 struct DebugFlags {
-    bool noTerrain = false, noWmo = false, noM2 = false;
+    bool noTerrain = false, noWmo = false, noM2 = false, noChar = false, charNoAnim = false, charAnimAll = false, where = false;
     float scale = 1.0f;
 };
 DebugFlags g_debug;
@@ -99,12 +102,19 @@ void pollDebugFlags() {
         f.noTerrain = strstr(buf, "noterrain") != nullptr;
         f.noWmo = strstr(buf, "nowmo") != nullptr;
         f.noM2 = strstr(buf, "nom2") != nullptr;
+        f.noChar = strstr(buf, "nochar") != nullptr;
+        f.charNoAnim = strstr(buf, "noanim") != nullptr;
+        f.charAnimAll = strstr(buf, "animall") != nullptr;
+        f.where = strstr(buf, "where") != nullptr;
         if (const char* sc = strstr(buf, "scale=")) f.scale = std::clamp(static_cast<float>(atof(sc + 6)), 0.2f, 1.0f);
     }
-    if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.scale != g_debug.scale) {
-        LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " scale=", f.scale);
+    if (f.noTerrain != g_debug.noTerrain || f.noWmo != g_debug.noWmo || f.noM2 != g_debug.noM2 || f.noChar != g_debug.noChar || f.charNoAnim != g_debug.charNoAnim || f.charAnimAll != g_debug.charAnimAll || f.scale != g_debug.scale) {
+        LOG_WARNING("gl.cfg: noterrain=", f.noTerrain, " nowmo=", f.noWmo, " nom2=", f.noM2, " nochar=", f.noChar, " noanim=", f.charNoAnim, " animall=", f.charAnimAll, " scale=", f.scale);
     }
+    if (f.where && !g_debug.where) gl::g_m2WhereRequest = true;  // once per `where` appearing in gl.cfg
     g_debug = f;
+    gl::g_charNoAnim = f.charNoAnim;
+    gl::g_charAnimAll = f.charAnimAll;
 }
 }  // namespace
 
@@ -267,6 +277,13 @@ bool Renderer::initializeRenderers(pipeline::AssetManager* assetManager, const s
             wmoRenderer.reset();
         }
     }
+    if (!characterRenderer) {
+        characterRenderer = std::make_unique<CharacterRenderer>();
+        if (!characterRenderer->glInitialize(assetManager)) {
+            LOG_ERROR("Character renderer (GL) did not start, drawing no characters");
+            characterRenderer.reset();
+        }
+    }
     if (!terrainManager) {
         terrainManager = std::make_unique<TerrainManager>();
         if (!terrainManager->initialize(assetManager, terrainRenderer.get())) {
@@ -370,6 +387,7 @@ void Renderer::renderWorld([[maybe_unused]] game::World* world, [[maybe_unused]]
     if (!g_debug.noTerrain) terrainRenderer->glRender(scene);
     if (!g_debug.noWmo && wmoRenderer && wmoRenderer->glReady()) wmoRenderer->glRender(scene);
     if (!g_debug.noM2 && m2Renderer && m2Renderer->glReady()) m2Renderer->glRender(scene);
+    if (!g_debug.noChar && characterRenderer && characterRenderer->glReady()) characterRenderer->glRender(scene);
     if (waterRenderer && waterRenderer->glReady()) {
         static const auto start = std::chrono::steady_clock::now();
         waterRenderer->glRender(scene, std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count());
@@ -429,6 +447,54 @@ core::ScreenRecorder::Stats Renderer::stopRecording() { return {}; }
 
 void Renderer::unregisterPreview([[maybe_unused]] CharacterPreview* preview) { }
 
+// The player's model follows the camera controller's character (position, facing) and plays what the controller is doing
+// (VITA-20 phase C). Upstream does this in Renderer::update and AnimationController::updateCharacterAnimation, which carries emotes,
+// mounts, combat stances and weapons the Vita does not draw yet: this is the part that matters for walking about.
+static void syncPlayerModel(Renderer& r) {
+    CharacterRenderer* chars = r.getCharacterRenderer();
+    CameraController* cc = r.getCameraController();
+    const uint32_t id = r.getCharacterInstanceId();
+    if (id == 0 || !chars || !cc) return;
+    chars->setInstancePosition(id, r.getCharacterPosition());
+
+    float yaw = r.getCharacterYaw();
+    const bool strafing = (cc->isStrafingLeft() || cc->isStrafingRight()) && !cc->isMovingBackward();
+    float torsoYawDeltaDeg = 0.0f;
+    if (cc->isMoving() && strafing) {
+        yaw = cc->getTravelYaw();
+        torsoYawDeltaDeg = cc->getFacingYaw() - yaw;
+    } else if (cc->isMoving() || cc->isRightMouseHeld() || cc->isTurningLeft() || cc->isTurningRight()) {
+        yaw = cc->getFacingYaw();
+    }
+    r.setCharacterYaw(yaw);
+    chars->setInstanceRotation(id, glm::vec3(0.0f, 0.0f, glm::radians(yaw)));
+    while (torsoYawDeltaDeg > 180.0f) torsoYawDeltaDeg -= 360.0f;
+    while (torsoYawDeltaDeg < -180.0f) torsoYawDeltaDeg += 360.0f;
+    chars->setInstanceTorsoYaw(id, glm::radians(torsoYawDeltaDeg));
+
+    // The model shows in third person and hides in first (the controller hides it up close; this brings it back when zoomed out).
+    if (cc->isThirdPerson() && !cc->isFirstPersonView()) chars->setInstanceVisible(id, true);
+
+    // What to play: swimming, in the air, moving (forward, back, strafing), standing.
+    uint32_t want = anim::STAND;
+    if (cc->isSwimming()) {
+        want = cc->isMoving() ? anim::SWIM : anim::SWIM_IDLE;
+    } else if (!cc->isGrounded()) {
+        want = cc->isJumping() ? anim::JUMP : anim::FALL;
+    } else if (cc->isMoving()) {
+        if (cc->isMovingBackward()) want = anim::WALK_BACKWARDS;
+        else if (strafing && !cc->isMovingForward()) want = cc->isStrafingLeft() ? anim::SHUFFLE_LEFT : anim::SHUFFLE_RIGHT;
+        else want = anim::RUN;
+    }
+    if (!chars->hasAnimation(id, want)) want = (want == anim::RUN) ? anim::WALK : anim::STAND;
+    static uint32_t lastInstance = 0, lastAnimation = ~0u;
+    if (id != lastInstance || want != lastAnimation) {
+        lastInstance = id;
+        lastAnimation = want;
+        chars->playAnimation(id, want, true);
+    }
+}
+
 void Renderer::update(float deltaTime) {
     // The game screen re-applies the saved setting (default on) every time it is shown: keep the idle orbit off here.
     if (cameraController) cameraController->setIdleOrbitEnabled(false);
@@ -463,6 +529,7 @@ void Renderer::update(float deltaTime) {
         const auto t0 = std::chrono::steady_clock::now();
         if (cameraController) cameraController->update(deltaTime);
         controllerMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        syncPlayerModel(*this);
         if (++frames == 600) {
             LOG_WARNING("Collision cost per frame: camera controller ", controllerMs / frames, " ms, WMO queries (whole frame) ",
                         wmoMs / frames, " ms in ", static_cast<double>(wmoCalls) / frames, " calls; M2 queries ", m2Ms / frames, " ms in ",
@@ -472,6 +539,7 @@ void Renderer::update(float deltaTime) {
             frames = 0;
         }
     }
+    if (characterRenderer && characterRenderer->glReady() && camera) characterRenderer->update(deltaTime, camera->getPosition());
     if (terrainManager && camera) terrainManager->update(*camera, deltaTime);
 }
 

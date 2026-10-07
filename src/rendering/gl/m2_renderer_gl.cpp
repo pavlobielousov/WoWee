@@ -26,6 +26,8 @@
 
 namespace wowee::rendering {
 
+namespace gl { bool g_m2WhereRequest = false; }  // set by gl.cfg `where`: log the doodads around the camera once
+
 // Static doodads (VITA-19): trees, rocks and props as they stand, without bones, particles, ribbons or texture animation.
 struct M2Renderer::Gl {
     struct Uniforms {
@@ -73,6 +75,8 @@ struct M2Renderer::Gl {
     int drawn = 0, culled = 0;
 };
 
+static std::unordered_map<const M2ModelGPU*, std::pair<glm::vec3, glm::vec3>> g_collisionBoundsCache;  // by model; dropped with the model
+
 M2Renderer::M2Renderer() = default;
 
 M2Renderer::~M2Renderer() {
@@ -87,6 +91,7 @@ bool M2Renderer::glInitialize(pipeline::AssetManager* assets) {
     gl_->assets = assets;
     assetManager = assets;
     gl_->textures.setAssetManager(assets);
+    gl_->textures.setAsync(true);  // BLPs are read on a worker; get() answers with a placeholder name (gl_texture.hpp)
     {
         // Doodad and building textures are capped at 256 on a side (WOWEE_TEXTURE_MAX in env.txt, 0 = keep all).
         const char* v = std::getenv("WOWEE_TEXTURE_MAX");
@@ -142,6 +147,7 @@ void M2Renderer::clear() {
     gl_->models.clear();
     gl_->instances.clear();
     gl_->gpuBytes = 0;
+    g_collisionBoundsCache.clear();
     models.clear();
     instances.clear();
     instanceIndexById.clear();
@@ -249,7 +255,29 @@ void M2Renderer::unloadModel(uint32_t modelId) {
     if (it->second.ibo) glDeleteBuffers(1, &it->second.ibo);
     gl_->gpuBytes -= std::min(gl_->gpuBytes, it->second.bytes);
     gl_->models.erase(it);
+    if (auto mm = models.find(modelId); mm != models.end()) g_collisionBoundsCache.erase(&mm->second);
     models.erase(modelId);
+}
+
+// The local box a collision query tests an instance against (its broad phase): upstream's tight box of the visible mesh, widened to hold the
+// model's own authored collision mesh. A tree model made of its canopy alone has no visible vertices below 3 yards above the ground and the
+// trunk's collision triangles reach the ground: boxed by the canopy, the tree was skipped for anyone standing under it (VITA-20, found on the
+// device with a collision trace: "rejected by the vertical test").
+static void collisionLocalBounds(const M2ModelGPU& model, glm::vec3& outMin, glm::vec3& outMax) {
+    getTightCollisionBounds(model, outMin, outMax);
+    if (!model.collision.valid()) return;
+    auto& cache = g_collisionBoundsCache;
+    auto it = cache.find(&model);
+    if (it == cache.end()) {
+        glm::vec3 lo(std::numeric_limits<float>::max()), hi(-std::numeric_limits<float>::max());
+        for (const glm::vec3& v : model.collision.vertices) {
+            lo = glm::min(lo, v);
+            hi = glm::max(hi, v);
+        }
+        it = cache.emplace(&model, std::make_pair(lo, hi)).first;
+    }
+    outMin = glm::min(outMin, it->second.first);
+    outMax = glm::max(outMax, it->second.second);
 }
 
 static void boundsOf(const glm::mat4& m, const glm::vec3& localCenter, float localRadius, glm::vec3& center, float& radius) {
@@ -299,7 +327,7 @@ void M2Renderer::mirrorCollisionInstance(uint32_t id, uint32_t modelId, const gl
     inst.invModelMatrix = glm::inverse(modelMatrix);
     inst.cachedModel = &mit->second;
     glm::vec3 localMin, localMax;
-    getTightCollisionBounds(model, localMin, localMax);
+    collisionLocalBounds(model, localMin, localMax);
     transformAABB(modelMatrix, localMin, localMax, inst.worldBoundsMin, inst.worldBoundsMax);
     instances.push_back(inst);
     instanceIndexById[id] = instances.size() - 1;
@@ -341,7 +369,7 @@ void M2Renderer::setInstanceTransform(uint32_t instanceId, const glm::mat4& tran
         mi.position = glm::vec3(transform[3]);
         mi.scale = glm::length(glm::vec3(transform[0]));
         glm::vec3 localMin, localMax;
-        if (mi.cachedModel) getTightCollisionBounds(*mi.cachedModel, localMin, localMax);
+        if (mi.cachedModel) collisionLocalBounds(*mi.cachedModel, localMin, localMax);
         transformAABB(transform, localMin, localMax, mi.worldBoundsMin, mi.worldBoundsMax);
         refileBounds(spatialGrid, oldMin, oldMax, mi.worldBoundsMin, mi.worldBoundsMax, instanceId);
     }
@@ -368,7 +396,56 @@ bool M2Renderer::getInstanceBounds(uint32_t instanceId, glm::vec3& outCenter, fl
 uint32_t M2Renderer::glInstanceCount() const { return gl_ ? static_cast<uint32_t>(gl_->instances.size()) : 0; }
 
 void M2Renderer::glRender(const gl::SceneParams& scene) {
+    if (gl_) gl_->textures.pump(2.0);  // textures the workers have read: uploaded into the names the models already hold
     if (!glReady() || gl_->instances.empty()) return;
+    if (gl::g_m2WhereRequest) {
+        // Diagnostic (VITA-20): which doodads are around the camera and what collides, for "this tree does not block me".
+        gl::g_m2WhereRequest = false;
+        struct Near { uint32_t id; float dist; };
+        std::vector<Near> nearby;
+        for (const auto& kv : gl_->instances) {
+            const float d = glm::length(kv.second.center - scene.eye) - kv.second.radius;
+            if (d < 8.0f) nearby.push_back({kv.first, d});
+        }
+        std::sort(nearby.begin(), nearby.end(), [](const Near& a, const Near& b) { return a.dist < b.dist; });
+        LOG_WARNING("M2 where: camera (", scene.eye.x, ", ", scene.eye.y, ", ", scene.eye.z, "), ", nearby.size(), " doodads within 8 yards of their surface");
+        for (std::size_t i = 0; i < nearby.size() && i < 14; ++i) {
+            const Gl::Instance& inst = gl_->instances.at(nearby[i].id);
+            auto mm = models.find(inst.model);
+            const bool mirrored = instanceIndexById.count(nearby[i].id) != 0;
+            LOG_WARNING("  doodad ", nearby[i].id, " '", mm != models.end() ? mm->second.name : std::string("?"), "' dist ", nearby[i].dist, " radius ", inst.radius, " scale ",
+                        glm::length(glm::vec3(inst.matrix[0])), " at (", inst.center.x, ", ", inst.center.y, ", ", inst.center.z, ") collision instance ", mirrored ? 1 : 0,
+                        mm != models.end() ? " authored tris " : "", mm != models.end() ? static_cast<int>(mm->second.collision.valid() ? mm->second.collision.triCount : 0) : 0,
+                        mm != models.end() ? " noBlock " : "", mm != models.end() ? static_cast<int>(mm->second.collisionNoBlock) : 0,
+                        mm != models.end() ? " trunk " : "", mm != models.end() ? static_cast<int>(mm->second.collisionTreeTrunk) : 0);
+            if (mm != models.end() && mm->second.collision.valid()) {
+                // The authored collision mesh against where the camera is, in the model's own space.
+                const auto& col = mm->second.collision;
+                glm::vec3 lo(1e9f), hi(-1e9f);
+                for (const auto& v : col.vertices) { lo = glm::min(lo, v); hi = glm::max(hi, v); }
+                uint32_t walls = 0, floors = 0, within3 = 0;
+                float nearestXY = 1e9f;
+                const glm::vec3 local = glm::vec3(glm::inverse(inst.matrix) * glm::vec4(scene.eye - glm::vec3(0, 0, 1.2f), 1.0f));
+                for (uint32_t ti = 0; ti < col.triCount; ++ti) {
+                    const glm::vec3& a = col.vertices[col.indices[ti * 3]];
+                    const glm::vec3& b = col.vertices[col.indices[ti * 3 + 1]];
+                    const glm::vec3& c = col.vertices[col.indices[ti * 3 + 2]];
+                    const glm::vec3 n = glm::cross(b - a, c - a);
+                    const float nl = glm::length(n);
+                    const float nz = nl > 1e-3f ? std::fabs(n.z / nl) : 0.0f;
+                    if (nz < 0.65f) ++walls;
+                    if (nz >= 0.35f) ++floors;
+                    const glm::vec3 centroid = (a + b + c) / 3.0f;
+                    const float dxy = glm::length(glm::vec2(centroid.x - local.x, centroid.y - local.y));
+                    nearestXY = std::min(nearestXY, dxy);
+                    if (dxy < 3.0f) ++within3;
+                }
+                LOG_WARNING("    collision mesh: ", col.triCount, " tris (", walls, " wall, ", floors, " floor), ", col.vertices.size(), " verts, local box (", lo.x, ",", lo.y, ",", lo.z,
+                            ")-(", hi.x, ",", hi.y, ",", hi.z, "); feet in model space (", local.x, ", ", local.y, ", ", local.z, "), nearest triangle centre ", nearestXY,
+                            " away, ", within3, " within 3");
+            }
+        }
+    }
     static gl::FrameStats stats("M2");
     stats.begin();
     Frustum frustum;
@@ -486,7 +563,7 @@ void M2Renderer::glRender(const gl::SceneParams& scene) {
     glDisable(GL_BLEND);
     stats.end(gl_->drawn, static_cast<long>(items.size()));
     if (stats.frames == 0) {
-        LOG_WARNING("GL memory M2: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), ", buffers ", gl_->gpuBytes / 1024,
+        LOG_WARNING("GL memory M2: textures ", gl_->textures.bytes() / 1024, " KB in ", gl_->textures.count(), " (RGBA ", gl_->textures.rgbaBytes() / 1024, " KB in ", gl_->textures.rgbaCount(), ")", ", buffers ", gl_->gpuBytes / 1024,
                     " KB, models ", gl_->models.size(), ", instances ", gl_->instances.size());
     }
 }

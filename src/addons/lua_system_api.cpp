@@ -8,6 +8,8 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <atomic>
+#include <mutex>
 #include <ranges>
 #include <set>
 #include <utility>
@@ -520,6 +522,9 @@ static std::string cvarStorePath() {
     return core::getConfigRoot() + "/cvars.cfg";
 }
 
+/// Bumped whenever the file changes (loaded or saved), so storedCVarValue's memo of what the file said can be dropped.
+static std::atomic<uint64_t> g_cvarFileRevision{1};
+
 /// Read the stored CVars back. Called once, before the interface loads,
 /// because a panel reads its checkbox out of the CVar as it is built and
 /// anything arriving later leaves the box disagreeing with the setting.
@@ -530,6 +535,7 @@ static std::string cvarStorePath() {
 /// on VARIABLES_LOADED - so it came back off on every login, and so did every
 /// other option the player had set.
 static void loadStoredCVars() {
+    g_cvarFileRevision.fetch_add(1, std::memory_order_relaxed);
     std::ifstream in(cvarStorePath());
     if (!in.is_open()) return;
     std::string line;
@@ -549,6 +555,7 @@ static void loadStoredCVars() {
 /// a few hundred bytes, and a setting that survives only a clean exit is not
 /// one a player can rely on.
 static void saveStoredCVars() {
+    g_cvarFileRevision.fetch_add(1, std::memory_order_relaxed);
     const std::string path = cvarStorePath();
     std::error_code ec;
     std::filesystem::create_directories(
@@ -1730,17 +1737,48 @@ std::string storedCVarValue(const std::string& key, const std::string& fallback)
     toLowerInPlace(wanted);
     if (auto it = cvarStore().find(wanted); it != cvarStore().end()) return it->second;
 
-    std::ifstream in(cvarStorePath());
-    if (!in.is_open()) return fallback;
-    std::string line;
-    while (std::getline(in, line)) {
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos || eq == 0) continue;
-        std::string k = line.substr(0, eq);
-        toLowerInPlace(k);
-        if (k == wanted) return line.substr(eq + 1);
+    // The file is read once per key until it changes. The nameplate and combat-text code asks for a CVar nobody has set every
+    // frame, and every ask opened and parsed the file: on the Vita that queues behind the asset loaders' reads from the card
+    // and stalled the UI thread for 0.2 to 1.5 s while creatures and terrain were loading (VITA-20, found by timing the
+    // sections of the in-game UI).
+    struct Entry {
+        bool found = false;
+        std::string value;
+    };
+    static std::mutex memoMutex;
+    static std::unordered_map<std::string, Entry> memo;
+    static uint64_t memoRevision = 0;
+    {
+        std::lock_guard<std::mutex> lock(memoMutex);
+        const uint64_t revision = g_cvarFileRevision.load(std::memory_order_relaxed);
+        if (memoRevision != revision) {
+            memo.clear();
+            memoRevision = revision;
+        }
+        if (auto it = memo.find(wanted); it != memo.end()) return it->second.found ? it->second.value : fallback;
     }
-    return fallback;
+
+    Entry entry;
+    std::ifstream in(cvarStorePath());
+    if (in.is_open()) {
+        std::string line;
+        while (std::getline(in, line)) {
+            const size_t eq = line.find('=');
+            if (eq == std::string::npos || eq == 0) continue;
+            std::string k = line.substr(0, eq);
+            toLowerInPlace(k);
+            if (k == wanted) {
+                entry.found = true;
+                entry.value = line.substr(eq + 1);
+                break;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(memoMutex);
+        if (memoRevision == g_cvarFileRevision.load(std::memory_order_relaxed)) memo[wanted] = entry;
+    }
+    return entry.found ? entry.value : fallback;
 }
 
 void setStoredCVar(const std::string& key, const std::string& value) {

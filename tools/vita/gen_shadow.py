@@ -147,7 +147,16 @@ EXTRA_MEMBERS['water_renderer.hpp'] = ('WaterRenderer', """    // ---- Vita (VIT
 """, """    std::unique_ptr<Gl> gl_;
 """)
 
+EXTRA_MEMBERS['character_renderer.hpp'] = ('CharacterRenderer', """    // ---- Vita (VITA-20): the GL half, src/rendering/gl/character_renderer_gl.cpp ----
+    bool glInitialize(pipeline::AssetManager* assets);
+    void glRender(const gl::SceneParams& scene);
+    [[nodiscard]] bool glReady() const;
+""", """    struct Gl;
+    std::unique_ptr<Gl> gl_;
+""")
+
 EXTRA_INCLUDES = {
+    'character_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'water_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'wmo_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',
     'm2_renderer.hpp': '#include "rendering/gl/scene_params.hpp"\n',

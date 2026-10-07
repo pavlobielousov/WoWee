@@ -157,7 +157,9 @@ target_link_libraries(wowee_client PRIVATE wowee_vita_shadow wowee_core imgui_vi
     ${WOWEE_CORE_LIBS} ${WOWEE_VITA_GL_LIBS} SDL3::SDL3)
 # The client's heap: 288 MB, which only starts under the extended memory mode (ATTRIBUTE2=12 in the VPK below). Without that
 # attribute, anything above about 200 MB makes the app fail to start; with it, vitaGL also gets a 26 MB RAM pool (13 MB before).
-set(WOWEE_VITA_CLIENT_HEAP_MB 288 CACHE STRING "newlib heap of wowee_client in MB (needs the extended memory mode)")
+# 256, not 288 (VITA-20): the heap peaked at 223 MB in the world with all its characters, and every MB the heap does not take goes to
+# vitaGL's RAM pool (25 -> 57 MB, 33 MB more GPU memory free in the world; DEV_SETUP 33.2).
+set(WOWEE_VITA_CLIENT_HEAP_MB 256 CACHE STRING "newlib heap of wowee_client in MB (needs the extended memory mode)")
 wowee_vita_executable(wowee_client ${WOWEE_VITA_CLIENT_HEAP_MB})
 
 # The shader cache (VITA-53, src/rendering/gl/shader_cache.cpp) sits in front of vitaGL's shader calls. The build tag is

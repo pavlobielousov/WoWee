@@ -2,6 +2,7 @@
 // The Vita's copy: every declaration that mentions Vulkan is removed (ADR-001, VITA-52).
 #pragma once
 
+#include "rendering/gl/scene_params.hpp"
 #include "rendering/gpu_texture.hpp"
 
 #include "pipeline/m2_loader.hpp"
@@ -57,6 +58,10 @@ struct WeaponAttachment {
  */
 class CharacterRenderer {
 public:
+    // ---- Vita (VITA-20): the GL half, src/rendering/gl/character_renderer_gl.cpp ----
+    bool glInitialize(pipeline::AssetManager* assets);
+    void glRender(const gl::SceneParams& scene);
+    [[nodiscard]] bool glReady() const;
     CharacterRenderer();
     ~CharacterRenderer();
 
@@ -192,6 +197,8 @@ public:
     void setPredecodedBLPCache(std::unordered_map<std::string, pipeline::BLPImage>* cache) { predecodedBLPCache_ = cache; }
 
 private:
+    struct Gl;
+    std::unique_ptr<Gl> gl_;
     std::unordered_map<std::string, pipeline::BLPImage>* predecodedBLPCache_ = nullptr;
     // GPU representation of M2 model
     struct M2ModelGPU {
