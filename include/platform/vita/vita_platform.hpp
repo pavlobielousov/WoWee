@@ -4,6 +4,7 @@
 // report. Everything here is Vita-only code; shared files call it from small `__vita__` arms.
 
 #include <cstddef>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,6 +35,12 @@ void initProcess();
 // Sends one log line as a UDP datagram when WOWEE_LOG_UDP=<ip>[:port] (from env.txt) is set.
 // Called by the logger under its mutex: must never log. Cheap no-op otherwise.
 void sendLogLine(const std::string& line);
+
+// Writes one log line to the log file on a thread of its own (VITA-20). The memory card is one queue: while workers stream reads,
+// a write from the main thread waited 150 ms on average and up to 1.1 s (74 of them in a two-minute walk, 11 s in all), and the
+// logger writes a line at a time. The first call starts the writer; it owns `stream` from then on, writes what has gathered as one
+// batch and flushes it. Called by the logger under its mutex: must never log.
+void asyncLogWrite(std::ofstream& stream, std::string line);
 
 // Logs (at WARNING, so the default log level shows it) what initProcess did and the resolved
 // data and config roots. The last step of the Vita startup path until the Application can be
